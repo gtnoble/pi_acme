@@ -1,0 +1,13 @@
+name = "pi_acme"
+description = "Acme frontend for the pi coding agent"
+version = "0.1.0-dev"
+
+authors = ["Garret Noble"]
+maintainers = ["Garret Noble <garretnoble@gmail.com>"]
+maintainers-logins = ["gtnoble"]
+licenses = "MIT OR Apache-2.0 WITH LLVM-exception"
+website = ""
+tags = []
+
+[[depends-on]]
+gnatcoll = "^25.0.0"

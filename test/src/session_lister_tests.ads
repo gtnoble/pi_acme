@@ -1,0 +1,25 @@
+with AUnit;
+with AUnit.Test_Fixtures;
+
+package Session_Lister_Tests is
+
+   type Test is new AUnit.Test_Fixtures.Test_Fixture with null record;
+
+   --  Pure functions (no filesystem)
+   procedure Test_Encode_Cwd_Absolute   (T : in out Test);
+   procedure Test_Encode_Cwd_Relative   (T : in out Test);
+   procedure Test_Encode_Cwd_Empty      (T : in out Test);
+   procedure Test_Format_Timestamp      (T : in out Test);
+   procedure Test_Format_Timestamp_Short (T : in out Test);
+
+   --  Parse_Session_File (writes a temp file)
+   procedure Test_Parse_Session_Full     (T : in out Test);
+   procedure Test_Parse_Session_No_Name  (T : in out Test);
+   procedure Test_Parse_Session_Bad_Json (T : in out Test);
+
+   --  Find_Session_File (creates temp files under $HOME/.pi/agent/sessions/)
+   procedure Test_Find_Session_File_Found     (T : in out Test);
+   procedure Test_Find_Session_File_Not_Found (T : in out Test);
+   procedure Test_Find_Session_File_Any_Dir   (T : in out Test);
+
+end Session_Lister_Tests;

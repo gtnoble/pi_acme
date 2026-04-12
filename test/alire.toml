@@ -1,0 +1,19 @@
+name = "pi_acme_test"
+description = "Tests for pi_acme"
+version = "0.1.0-dev"
+
+authors = ["Garret Noble"]
+maintainers = ["Garret Noble <garretnoble@gmail.com>"]
+maintainers-logins = ["gtnoble"]
+licenses = "MIT OR Apache-2.0 WITH LLVM-exception"
+website = ""
+tags = []
+
+executables = ["pi_acme_test"]
+
+[[depends-on]]
+aunit = "^25.0.0"
+pi_acme = "*"
+
+[[pins]]
+pi_acme = { path = ".." }
