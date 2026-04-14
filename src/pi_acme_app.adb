@@ -11,13 +11,13 @@ with Ada.Strings.Fixed;
 with Ada.Strings.Unbounded; use Ada.Strings.Unbounded;
 with Ada.Text_IO;
 with Interfaces;             use Interfaces;
+with GNAT.SHA256;
 with GNATCOLL.JSON;          use GNATCOLL.JSON;
 with GNATCOLL.OS.FS;
 with GNATCOLL.OS.Process;
 with Nine_P;                 use Nine_P;
 with Nine_P.Client;          use Nine_P.Client;
 with Acme;
-with Acme.Window;
 with Acme.Event_Parser;
 with Acme.Raw_Events;
 with Pi_RPC;
@@ -254,6 +254,87 @@ package body Pi_Acme_App is
          return Base (Base'First .. Dot);
       end;
    end Agent_Stem;
+
+   --  Return the first 16 hex characters of the SHA-256 digest of Tool_Id.
+   --  Matches the token produced by the Python reference implementation:
+   --    hashlib.sha256(tool_id.encode()).hexdigest()[:16]
+   function Hash_Tool_Id (Tool_Id : String) return String is
+   begin
+      return GNAT.SHA256.Digest (Tool_Id) (1 .. 16);
+   end Hash_Tool_Id;
+
+   --  Scan Context (body bytes starting at rune Ctx_Start) for a
+   --  llm-chat+.../tool/... token that contains rune position Anchor.
+   --  Returns the token string, or "" if not found.
+   --
+   --  The token pattern is:
+   --    llm-chat+ [0-9a-f-]+ /tool/ [0-9a-f]+
+   --
+   --  Positions in Context are mapped to rune offsets by adding Ctx_Start;
+   --  this is an approximation when the body contains multi-byte UTF-8
+   --  sequences, but is exact for the ASCII-only tokens we scan for.
+   function Scan_Tool_Token
+     (Context   : String;
+      Ctx_Start : Natural;
+      Anchor    : Natural) return String
+   is
+      Prefix   : constant String  := "llm-chat+";
+      Pref_Len : constant Natural := Prefix'Length;
+   begin
+      if Context'Length < Pref_Len then
+         return "";
+      end if;
+      for I in Context'First .. Context'Last - Pref_Len + 1 loop
+         if Context (I .. I + Pref_Len - 1) = Prefix then
+            --  Advance past the UUID part: [0-9a-f-]+
+            declare
+               J : Natural := I + Pref_Len;
+            begin
+               while J <= Context'Last
+                 and then
+                   (Context (J) in '0' .. '9' | 'a' .. 'f' | '-')
+               loop
+                  J := J + 1;
+               end loop;
+               --  Require at least one char before "/tool/" and the
+               --  separator itself.
+               if J > I + Pref_Len
+                 and then J + 5 <= Context'Last
+                 and then Context (J .. J + 5) = "/tool/"
+               then
+                  --  Advance past the hex suffix: [0-9a-f]+
+                  declare
+                     H : Natural := J + 6;
+                  begin
+                     while H <= Context'Last
+                       and then
+                         (Context (H) in '0' .. '9' | 'a' .. 'f')
+                     loop
+                        H := H + 1;
+                     end loop;
+                     if H > J + 6 then
+                        --  Token occupies Context(I .. H-1).
+                        --  Convert to approximate body rune offsets.
+                        declare
+                           Tok_Q0 : constant Natural :=
+                             Ctx_Start + (I - Context'First);
+                           Tok_Q1 : constant Natural :=
+                             Ctx_Start + (H - 1 - Context'First);
+                        begin
+                           if Tok_Q0 <= Anchor
+                             and then Anchor <= Tok_Q1
+                           then
+                              return Context (I .. H - 1);
+                           end if;
+                        end;
+                     end if;
+                  end;
+               end if;
+            end;
+         end if;
+      end loop;
+      return "";
+   end Scan_Tool_Token;
 
    --  Build the one-line status string.
    function Format_Status
@@ -533,17 +614,31 @@ package body Pi_Acme_App is
       elsif Kind = "tool_execution_start" then
          State.Set_Text_Emitted (True);
          declare
-            Tool : constant String     := Get_String (Event, "toolName");
-            Args : constant JSON_Value := Get_Object (Event, "args");
+            Tool    : constant String     := Get_String (Event, "toolName");
+            Args    : constant JSON_Value := Get_Object (Event, "args");
+            Tool_Id : constant String     :=
+              Get_String (Event, "toolCallId");
+            Tok     : constant String     :=
+              (if Tool_Id'Length > 0
+               then Hash_Tool_Id (Tool_Id)
+               else "");
+            Sess    : constant String     := State.Session_Id;
          begin
             if Section /= No_Section then
                Acme.Window.Append (Win, FS, "" & ASCII.LF & ASCII.LF);
             else
                Acme.Window.Append (Win, FS, "" & ASCII.LF);
             end if;
-            Acme.Window.Append
-              (Win, FS,
-               ASCII.LF & UC_BOX_TL & " " & UC_GEAR & " " & Tool);
+            if Sess'Length > 0 and then Tok'Length > 0 then
+               Acme.Window.Append
+                 (Win, FS,
+                  ASCII.LF & UC_BOX_TL & " " & UC_GEAR & " " & Tool
+                  & " llm-chat+" & Sess & "/tool/" & Tok);
+            else
+               Acme.Window.Append
+                 (Win, FS,
+                  ASCII.LF & UC_BOX_TL & " " & UC_GEAR & " " & Tool);
+            end if;
             --  Show key args (skip oldText/newText — too long)
             if Tool = "edit" then
                Acme.Window.Append
@@ -1439,13 +1534,37 @@ package body Pi_Acme_App is
                                                 TR        : constant
                                                   Tool_Result_Entry :=
                                                     Find_TR (Tool_Id);
+                                                Tok       : constant
+                                                  String :=
+                                                    (if Tool_Id'Length
+                                                        > 0
+                                                     then Hash_Tool_Id
+                                                            (Tool_Id)
+                                                     else "");
                                              begin
-                                                Append
-                                                  (Buf,
-                                                   ASCII.LF & ASCII.LF
-                                                   & UC_BOX_TL & " "
-                                                   & UC_GEAR & " "
-                                                   & Tool_Name);
+                                                if UUID'Length > 0
+                                                  and then
+                                                    Tok'Length > 0
+                                                then
+                                                   Append
+                                                     (Buf,
+                                                      ASCII.LF
+                                                      & ASCII.LF
+                                                      & UC_BOX_TL
+                                                      & " " & UC_GEAR
+                                                      & " " & Tool_Name
+                                                      & " llm-chat+"
+                                                      & UUID & "/tool/"
+                                                      & Tok);
+                                                else
+                                                   Append
+                                                     (Buf,
+                                                      ASCII.LF
+                                                      & ASCII.LF
+                                                      & UC_BOX_TL
+                                                      & " " & UC_GEAR
+                                                      & " " & Tool_Name);
+                                                end if;
                                                 --  Show args.
                                                 if Tool_Name = "edit"
                                                   and then
@@ -1642,7 +1761,8 @@ package body Pi_Acme_App is
       Proc   : Pi_RPC.Process  := Pi_RPC.Start
         (Session_Id    => To_String (Opts.Session_Id),
          Model         => To_String (Opts.Model),
-         System_Prompt => To_String (Opts.Agent));
+         System_Prompt => To_String (Opts.Agent),
+         No_Tools      => Opts.No_Tools);
       State  : App_State;
 
       --  ── Inner task declarations ────────────────────────────────────────
@@ -1804,6 +1924,86 @@ package body Pi_Acme_App is
                  Acme.Window.Event_Path (Win),
                  O_READ);
          Parser  : Acme.Raw_Events.Event_Parser;
+
+         --  Launch  llm-chat-open Token  and wait for it.
+         --  On non-zero exit, appends a warning line to the window.
+         procedure Run_Llm_Chat_Open (Token : String) is
+            use GNATCOLL.OS.FS;
+            use GNATCOLL.OS.Process;
+            Null_In            : constant File_Descriptor :=
+              Open (Null_File, Read_Mode);
+            Stderr_R, Stderr_W : File_Descriptor;
+            Args               : Argument_List;
+            Handle             : Process_Handle;
+            Exit_Code          : Integer;
+         begin
+            Open_Pipe (Stderr_R, Stderr_W);
+            Args.Append ("llm-chat-open");
+            Args.Append (Token);
+            Handle := Start (Args   => Args,
+                             Stdin  => Null_In,
+                             Stdout => Stderr_W,
+                             Stderr => Stderr_W);
+            Close (Null_In);
+            Close (Stderr_W);
+            Exit_Code := Wait (Handle);
+            if Exit_Code /= 0 then
+               declare
+                  Buffer  : String (1 .. 256);
+                  Bytes   : Integer;
+                  Err_Msg : Unbounded_String;
+               begin
+                  loop
+                     Bytes := Read (Stderr_R, Buffer);
+                     exit when Bytes <= 0;
+                     Append (Err_Msg, Buffer (1 .. Bytes));
+                  end loop;
+                  if Length (Err_Msg) > 0 then
+                     Acme.Window.Append
+                       (Win, My_FS'Access,
+                        ASCII.LF & UC_WARN & " llm-chat-open: "
+                        & To_String (Err_Msg) & ASCII.LF);
+                  end if;
+               end;
+            end if;
+            Close (Stderr_R);
+         exception
+            when Ex : others =>
+               Acme.Window.Append
+                 (Win, My_FS'Access,
+                  ASCII.LF & UC_WARN & " llm-chat-open error: "
+                  & Ada.Exceptions.Exception_Message (Ex) & ASCII.LF);
+         end Run_Llm_Chat_Open;
+
+         --  Scan a ±200-rune context window around the click position for
+         --  a llm-chat+.../tool/... URI.  If found and the click lands
+         --  within the token, launch llm-chat-open and return True.
+         function Try_Open_Tool_URI
+           (Ev : Acme.Event_Parser.Event) return Boolean
+         is
+            Anchor    : constant Natural :=
+              (if Ev.Eq1 > Ev.Eq0
+               then (Ev.Eq0 + Ev.Eq1) / 2
+               else Ev.Q0);
+            Ctx_Start : constant Natural :=
+              (if Anchor > 200 then Anchor - 200 else 0);
+            Ctx_End   : constant Natural := Anchor + 200;
+            Context   : constant String  :=
+              Acme.Window.Read_Chars
+                (Win, My_FS'Access, Ctx_Start, Ctx_End);
+            Token     : constant String  :=
+              Scan_Tool_Token (Context, Ctx_Start, Anchor);
+         begin
+            if Token'Length = 0 then
+               return False;
+            end if;
+            Run_Llm_Chat_Open (Token);
+            return True;
+         exception
+            when others =>
+               return False;
+         end Try_Open_Tool_URI;
+
       begin
          loop
             declare
@@ -1838,11 +2038,17 @@ package body Pi_Acme_App is
                                       (Win, My_FS'Access,
                                        ASCII.LF & UC_TRI_R
                                        & " " & Sel & ASCII.LF);
-                                    Pi_RPC.Send
-                                      (Proc,
-                                       "{""type"":""prompt"","
-                                       & """message"":"
-                                       & """" & Sel & """}");
+                                    declare
+                                       Msg : constant JSON_Value :=
+                                         Create_Object;
+                                    begin
+                                       Msg.Set_Field
+                                         ("type", Create ("prompt"));
+                                       Msg.Set_Field
+                                         ("message", Create (Sel));
+                                       Pi_RPC.Send
+                                         (Proc, Write (Msg));
+                                    end;
                                  end if;
                               end;
                            elsif Text = "Stop" then
@@ -1973,9 +2179,18 @@ package body Pi_Acme_App is
                                  Ev.C1, Ev.C2, Ev.Q0, Ev.Q1);
                            end if;
                         elsif C2 in 'L' | 'l' then
-                           Acme.Window.Send_Event
-                             (Win, My_FS'Access,
-                              Ev.C1, Ev.C2, Ev.Q0, Ev.Q1);
+                           --  Try to find a llm-chat+.../tool/... URI near
+                           --  the click before falling back to the plumber.
+                           --  acme's expand() stops at punctuation, so many
+                           --  click positions on the URI send no event at
+                           --  all or send a truncated token; we work around
+                           --  this by reading a small context window and
+                           --  scanning for the pattern ourselves.
+                           if not Try_Open_Tool_URI (Ev) then
+                              Acme.Window.Send_Event
+                                (Win, My_FS'Access,
+                                 Ev.C1, Ev.C2, Ev.Q0, Ev.Q1);
+                           end if;
                         end if;
                      end;
                   end;
@@ -2021,7 +2236,7 @@ package body Pi_Acme_App is
                      end loop;
                      if First_Slash > 0
                        and then Data (Data'First .. First_Slash - 1)
-                                = My_PID
+                                = "model+" & My_PID
                      then
                         --  Rest is PROVIDER/MODELID — split on next '/'.
                         declare

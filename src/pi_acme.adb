@@ -1,6 +1,7 @@
 --  pi_acme — Acme frontend for the pi coding agent.
 --
---  Usage: pi_acme [--session UUID] [--model PROVIDER/ID] [--agent NAME]
+--  Usage: pi_acme [--session UUID] [--model PROVIDER/ID]
+--                 [--agent NAME] [--no-tools]
 --
 --  Project: pi_acme
 --  For revision history, see the project version-control log.
@@ -36,6 +37,8 @@ begin
             I := I + 1;
             Opts.Agent :=
               To_Unbounded_String (Ada.Command_Line.Argument (I));
+         elsif Arg = "--no-tools" then
+            Opts.No_Tools := True;
          else
             Ada.Text_IO.Put_Line
               (Ada.Text_IO.Standard_Error,

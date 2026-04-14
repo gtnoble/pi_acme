@@ -30,12 +30,14 @@ package Pi_RPC is
    --  add the corresponding flags.  Cwd sets the working directory.
    --  Set No_Session => True to pass --no-session (avoids writing session
    --  files — useful in tests to prevent state sharing between runs).
+   --  Set No_Tools => True to pass --no-tools (disables all built-in tools).
    function Start
      (Session_Id    : String  := "";
       Model         : String  := "";
       System_Prompt : String  := "";
       Cwd           : String  := "";
-      No_Session    : Boolean := False) return Process;
+      No_Session    : Boolean := False;
+      No_Tools      : Boolean := False) return Process;
 
    --  Write Json (a single JSON object, no newline) to pi's stdin.
    procedure Send (P : in out Process; Json : String);

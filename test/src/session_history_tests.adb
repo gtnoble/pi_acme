@@ -9,6 +9,7 @@ with Ada.Environment_Variables;
 with Ada.Strings.Fixed;
 with Ada.Strings.Unbounded; use Ada.Strings.Unbounded;
 with Ada.Text_IO;
+with GNAT.SHA256;
 with GNATCOLL.OS.FS;
 with GNATCOLL.OS.Process;   use GNATCOLL.OS.Process;
 with Nine_P;
@@ -599,5 +600,148 @@ package body Session_History_Tests is
             raise;
       end;
    end Test_Render_Separator;
+
+   --  ── Test_Render_Tool_Call_URI ─────────────────────────────────────────
+   --
+   --  When a toolCall block carries an "id" field, Render_Session_History
+   --  must embed a  llm-chat+UUID/tool/HASH  clickable URI on the header
+   --  line, where HASH = Hash_Tool_Id(id).
+
+   procedure Test_Render_Tool_Call_URI (T : in out Test) is
+      pragma Unreferenced (T);
+      Session_UUID : constant String := "test-piacme-render-uri";
+      Tool_Call_Id : constant String := "tc-uri-check-001";
+      --  Compute the expected 16-char hash the same way the production code
+      --  does, using GNAT.SHA256 directly so the test is self-contained.
+      Expected_Hash : constant String :=
+        GNAT.SHA256.Digest (Tool_Call_Id) (1 .. 16);
+      Expected_URI  : constant String :=
+        "llm-chat+" & Session_UUID & "/tool/" & Expected_Hash;
+   begin
+      if not Acme_Running then
+         return;
+      end if;
+      declare
+         Path : constant String := Write_Session
+           (Session_UUID,
+            Session_Header (Session_UUID)
+            & "{""type"":""message"","
+            & """message"":{""role"":""user"","
+            & """content"":[{""type"":""text"","
+            & """text"":""Do something""}]}}"
+            & ASCII.LF
+            & "{""type"":""message"","
+            & """message"":{""role"":""assistant"","
+            & """content"":[{""type"":""toolCall"","
+            & """id"":""" & Tool_Call_Id & ""","
+            & """name"":""bash"","
+            & """arguments"":{""command"":""echo hi""}}],"
+            & """usage"":{""input"":100,""output"":10,"
+            & """cacheRead"":0,""cacheWrite"":0}}}"
+            & ASCII.LF
+            & "{""type"":""message"","
+            & """message"":{""role"":""toolResult"","
+            & """toolCallId"":""" & Tool_Call_Id & ""","
+            & """isError"":false,"
+            & """content"":[{""type"":""text"","
+            & """text"":""hi""}]}}"
+            & ASCII.LF);
+         pragma Unreferenced (Path);
+         FS    : aliased Nine_P.Client.Fs :=
+           Ns_Mount ("acme");
+         Win   : Acme.Window.Win :=
+           Acme.Window.New_Win (FS'Access);
+         State : App_State;
+         Id    : constant String :=
+           Natural_Image (Acme.Window.Id (Win));
+      begin
+         Render_Session_History (Session_UUID, Win, FS'Access, State);
+         declare
+            Body_Text : constant String :=
+              Read_Via_9p ("acme/" & Id & "/body");
+         begin
+            Assert
+              (Contains (Body_Text, Expected_URI),
+               "Tool call header should contain the llm-chat+UUID/tool/HASH "
+               & "URI; expected: " & Expected_URI);
+         end;
+         Acme.Window.Ctl (Win, FS'Access, "clean");
+         Acme.Window.Ctl (Win, FS'Access, "del");
+         Delete_Session (Session_UUID);
+      exception
+         when others =>
+            Delete_Session (Session_UUID);
+            raise;
+      end;
+   end Test_Render_Tool_Call_URI;
+
+   --  ── Test_Render_Tool_Call_No_URI ──────────────────────────────────────
+   --
+   --  When a toolCall block has no "id" field (or an empty id), no URI
+   --  is added — the header line should still show the tool name but must
+   --  not contain "llm-chat+".
+
+   procedure Test_Render_Tool_Call_No_URI (T : in out Test) is
+      pragma Unreferenced (T);
+      Session_UUID : constant String := "test-piacme-render-nouri";
+   begin
+      if not Acme_Running then
+         return;
+      end if;
+      declare
+         Path : constant String := Write_Session
+           (Session_UUID,
+            Session_Header (Session_UUID)
+            & "{""type"":""message"","
+            & """message"":{""role"":""user"","
+            & """content"":[{""type"":""text"","
+            & """text"":""Do something""}]}}"
+            & ASCII.LF
+            & "{""type"":""message"","
+            & """message"":{""role"":""assistant"","
+            & """content"":[{""type"":""toolCall"","
+            & """id"":"""","
+            & """name"":""bash"","
+            & """arguments"":{""command"":""echo hi""}}],"
+            & """usage"":{""input"":100,""output"":10,"
+            & """cacheRead"":0,""cacheWrite"":0}}}"
+            & ASCII.LF
+            & "{""type"":""message"","
+            & """message"":{""role"":""toolResult"","
+            & """toolCallId"":"""","
+            & """isError"":false,"
+            & """content"":[{""type"":""text"","
+            & """text"":""hi""}]}}"
+            & ASCII.LF);
+         pragma Unreferenced (Path);
+         FS    : aliased Nine_P.Client.Fs :=
+           Ns_Mount ("acme");
+         Win   : Acme.Window.Win :=
+           Acme.Window.New_Win (FS'Access);
+         State : App_State;
+         Id    : constant String :=
+           Natural_Image (Acme.Window.Id (Win));
+      begin
+         Render_Session_History (Session_UUID, Win, FS'Access, State);
+         declare
+            Body_Text : constant String :=
+              Read_Via_9p ("acme/" & Id & "/body");
+         begin
+            Assert
+              (Contains (Body_Text, "bash"),
+               "Tool name should appear in body even without a URI");
+            Assert
+              (not Contains (Body_Text, "llm-chat+"),
+               "No llm-chat+ URI should appear when tool call id is empty");
+         end;
+         Acme.Window.Ctl (Win, FS'Access, "clean");
+         Acme.Window.Ctl (Win, FS'Access, "del");
+         Delete_Session (Session_UUID);
+      exception
+         when others =>
+            Delete_Session (Session_UUID);
+            raise;
+      end;
+   end Test_Render_Tool_Call_No_URI;
 
 end Session_History_Tests;

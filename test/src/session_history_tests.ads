@@ -42,4 +42,10 @@ package Session_History_Tests is
    --  SEPARATOR line is appended after the history.
    procedure Test_Render_Separator         (T : in out Test);
 
+   --  Tool call header contains llm-chat+UUID/tool/HASH clickable URI.
+   procedure Test_Render_Tool_Call_URI     (T : in out Test);
+
+   --  Tool call header has no URI when toolCallId is absent.
+   procedure Test_Render_Tool_Call_No_URI  (T : in out Test);
+
 end Session_History_Tests;

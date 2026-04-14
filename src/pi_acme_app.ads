@@ -95,6 +95,7 @@ package Pi_Acme_App is
       Session_Id : Ada.Strings.Unbounded.Unbounded_String;
       Model      : Ada.Strings.Unbounded.Unbounded_String;
       Agent      : Ada.Strings.Unbounded.Unbounded_String;
+      No_Tools   : Boolean := False;
    end record;
 
    --  ── Entry point ──────────────────────────────────────────────────────
@@ -135,5 +136,28 @@ package Pi_Acme_App is
    function Parse_Session_Token
      (Data       : String;
       Pid_Prefix : String) return String;
+
+   --  ── Tool call URI helpers ─────────────────────────────────────────────
+
+   --  Return the first 16 hex characters of the SHA-256 digest of Tool_Id,
+   --  matching the token computed by the Python reference implementation:
+   --    hashlib.sha256(tool_id.encode()).hexdigest()[:16]
+   function Hash_Tool_Id (Tool_Id : String) return String;
+
+   --  Scan Context (a substring of the acme body starting at rune Ctx_Start)
+   --  for a llm-chat+.../tool/... URI that contains rune position Anchor.
+   --  Returns the first matching token string, or "" if none is found.
+   --
+   --  Token pattern:  llm-chat+ [0-9a-f-]+ /tool/ [0-9a-f]+
+   --
+   --  Local byte positions in Context are converted to approximate body rune
+   --  offsets by adding Ctx_Start.  This is exact for the ASCII-only tokens
+   --  this function scans for; any multi-byte UTF-8 characters that precede
+   --  the token in the context window introduce only a small positive error
+   --  that is acceptable for click-position matching.
+   function Scan_Tool_Token
+     (Context   : String;
+      Ctx_Start : Natural;
+      Anchor    : Natural) return String;
 
 end Pi_Acme_App;

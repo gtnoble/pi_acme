@@ -1,4 +1,3 @@
-with AUnit.Test_Suites;
 with AUnit.Test_Caller;
 with Nine_P_Proto_Tests;
 with Nine_P_Client_Tests;
@@ -12,6 +11,7 @@ with Pi_Interface_Tests;
 with Session_Lister_Tests;
 with Pi_Acme_App_Tests;
 with Session_History_Tests;
+with Tool_URI_Tests;
 
 package body Test_Suites is
 
@@ -39,6 +39,8 @@ package body Test_Suites is
      new AUnit.Test_Caller (Pi_Acme_App_Tests.Test);
    package Session_History_Caller is
      new AUnit.Test_Caller (Session_History_Tests.Test);
+   package Tool_URI_Caller is
+     new AUnit.Test_Caller (Tool_URI_Tests.Test);
 
    function Suite return AUnit.Test_Suites.Access_Test_Suite is
       Result : constant AUnit.Test_Suites.Access_Test_Suite :=
@@ -380,6 +382,71 @@ package body Test_Suites is
       Result.Add_Test (Session_History_Caller.Create
         ("[integration] Render: separator appended after history",
          Session_History_Tests.Test_Render_Separator'Access));
+      Result.Add_Test (Session_History_Caller.Create
+        ("[integration] Render: tool call header contains llm-chat+ URI",
+         Session_History_Tests.Test_Render_Tool_Call_URI'Access));
+      Result.Add_Test (Session_History_Caller.Create
+        ("[integration] Render: tool call header has no URI when id absent",
+         Session_History_Tests.Test_Render_Tool_Call_No_URI'Access));
+
+      --  Tool_URI unit tests (pure, no acme required)
+      Result.Add_Test (Tool_URI_Caller.Create
+        ("Hash_Tool_Id: SHA-256 of empty string",
+         Tool_URI_Tests.Test_Hash_Empty'Access));
+      Result.Add_Test (Tool_URI_Caller.Create
+        ("Hash_Tool_Id: known values match Python reference",
+         Tool_URI_Tests.Test_Hash_Known_Values'Access));
+      Result.Add_Test (Tool_URI_Caller.Create
+        ("Hash_Tool_Id: result is always 16 characters",
+         Tool_URI_Tests.Test_Hash_Length'Access));
+      Result.Add_Test (Tool_URI_Caller.Create
+        ("Hash_Tool_Id: distinct inputs produce distinct hashes",
+         Tool_URI_Tests.Test_Hash_Distinct'Access));
+      Result.Add_Test (Tool_URI_Caller.Create
+        ("Hash_Tool_Id: result contains only lowercase hex",
+         Tool_URI_Tests.Test_Hash_Lowercase_Hex'Access));
+      Result.Add_Test (Tool_URI_Caller.Create
+        ("Scan_Tool_Token: token at context start",
+         Tool_URI_Tests.Test_Scan_Token_At_Start'Access));
+      Result.Add_Test (Tool_URI_Caller.Create
+        ("Scan_Tool_Token: token at context end",
+         Tool_URI_Tests.Test_Scan_Token_At_End'Access));
+      Result.Add_Test (Tool_URI_Caller.Create
+        ("Scan_Tool_Token: token in middle of context",
+         Tool_URI_Tests.Test_Scan_Token_In_Middle'Access));
+      Result.Add_Test (Tool_URI_Caller.Create
+        ("Scan_Tool_Token: anchor at first character of token",
+         Tool_URI_Tests.Test_Scan_Anchor_At_Token_Start'Access));
+      Result.Add_Test (Tool_URI_Caller.Create
+        ("Scan_Tool_Token: anchor at last character of token",
+         Tool_URI_Tests.Test_Scan_Anchor_At_Token_End'Access));
+      Result.Add_Test (Tool_URI_Caller.Create
+        ("Scan_Tool_Token: anchor one position before token",
+         Tool_URI_Tests.Test_Scan_Anchor_Before_Token'Access));
+      Result.Add_Test (Tool_URI_Caller.Create
+        ("Scan_Tool_Token: anchor one position after token",
+         Tool_URI_Tests.Test_Scan_Anchor_After_Token'Access));
+      Result.Add_Test (Tool_URI_Caller.Create
+        ("Scan_Tool_Token: empty context",
+         Tool_URI_Tests.Test_Scan_Empty_Context'Access));
+      Result.Add_Test (Tool_URI_Caller.Create
+        ("Scan_Tool_Token: context with no token",
+         Tool_URI_Tests.Test_Scan_No_Token'Access));
+      Result.Add_Test (Tool_URI_Caller.Create
+        ("Scan_Tool_Token: token missing /tool/ separator",
+         Tool_URI_Tests.Test_Scan_No_Tool_Separator'Access));
+      Result.Add_Test (Tool_URI_Caller.Create
+        ("Scan_Tool_Token: empty hex suffix after /tool/",
+         Tool_URI_Tests.Test_Scan_Empty_Hex_Suffix'Access));
+      Result.Add_Test (Tool_URI_Caller.Create
+        ("Scan_Tool_Token: empty UUID part",
+         Tool_URI_Tests.Test_Scan_Empty_Uuid'Access));
+      Result.Add_Test (Tool_URI_Caller.Create
+        ("Scan_Tool_Token: non-zero Ctx_Start shifts positions",
+         Tool_URI_Tests.Test_Scan_Nonzero_Ctx_Start'Access));
+      Result.Add_Test (Tool_URI_Caller.Create
+        ("Scan_Tool_Token: anchor in second of two tokens",
+         Tool_URI_Tests.Test_Scan_Second_Of_Two'Access));
 
       return Result;
    end Suite;

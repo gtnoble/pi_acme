@@ -57,7 +57,8 @@ package body Pi_RPC is
       Model         : String  := "";
       System_Prompt : String  := "";
       Cwd           : String  := "";
-      No_Session    : Boolean := False) return Process
+      No_Session    : Boolean := False;
+      No_Tools      : Boolean := False) return Process
    is
       Stdin_R,  Stdin_W  : File_Descriptor;
       Stdout_R, Stdout_W : File_Descriptor;
@@ -89,6 +90,10 @@ package body Pi_RPC is
 
       if No_Session then
          Args.Append ("--no-session");
+      end if;
+
+      if No_Tools then
+         Args.Append ("--no-tools");
       end if;
 
       return Result : Process do
