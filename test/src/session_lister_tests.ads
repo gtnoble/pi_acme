@@ -22,4 +22,10 @@ package Session_Lister_Tests is
    procedure Test_Find_Session_File_Not_Found (T : in out Test);
    procedure Test_Find_Session_File_Any_Dir   (T : in out Test);
 
+   --  Fork_Session (creates source + target session files)
+   procedure Test_Fork_Session_One_Turn     (T : in out Test);
+   procedure Test_Fork_Session_Second_Turn  (T : in out Test);
+   procedure Test_Fork_Session_Beyond_End   (T : in out Test);
+   procedure Test_Fork_Session_Missing_Src  (T : in out Test);
+
 end Session_Lister_Tests;

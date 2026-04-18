@@ -293,6 +293,18 @@ package body Test_Suites is
       Result.Add_Test (Session_Lister_Caller.Create
         ("Find_Session_File searches all session subdirectories",
          Session_Lister_Tests.Test_Find_Session_File_Any_Dir'Access));
+      Result.Add_Test (Session_Lister_Caller.Create
+        ("Fork_Session forks after first turn",
+         Session_Lister_Tests.Test_Fork_Session_One_Turn'Access));
+      Result.Add_Test (Session_Lister_Caller.Create
+        ("Fork_Session forks after second turn",
+         Session_Lister_Tests.Test_Fork_Session_Second_Turn'Access));
+      Result.Add_Test (Session_Lister_Caller.Create
+        ("Fork_Session returns empty beyond last turn",
+         Session_Lister_Tests.Test_Fork_Session_Beyond_End'Access));
+      Result.Add_Test (Session_Lister_Caller.Create
+        ("Fork_Session returns empty for missing source",
+         Session_Lister_Tests.Test_Fork_Session_Missing_Src'Access));
 
       --  Pi_Acme_App (App_State) tests
       Result.Add_Test (App_State_Caller.Create
@@ -353,6 +365,85 @@ package body Test_Suites is
       Result.Add_Test (App_State_Caller.Create
         ("Parse_Session_Token non-session token",
          Pi_Acme_App_Tests.Test_Parse_Token_Non_Token'Access));
+      Result.Add_Test (App_State_Caller.Create
+        ("App_State Turn_Count increment",
+         Pi_Acme_App_Tests.Test_State_Turn_Count_Increment'Access));
+      Result.Add_Test (App_State_Caller.Create
+        ("App_State Turn_Count set",
+         Pi_Acme_App_Tests.Test_State_Turn_Count_Set'Access));
+      Result.Add_Test (App_State_Caller.Create
+        ("App_State Turn_Count reset",
+         Pi_Acme_App_Tests.Test_State_Turn_Count_Reset'Access));
+      Result.Add_Test (App_State_Caller.Create
+        ("App_State Has_Text_Delta initial value is False",
+         Pi_Acme_App_Tests.Test_State_Has_Text_Delta_Initial'Access));
+      Result.Add_Test (App_State_Caller.Create
+        ("App_State Has_Text_Delta set and clear",
+         Pi_Acme_App_Tests.Test_State_Has_Text_Delta_Set_And_Clear'Access));
+      Result.Add_Test (App_State_Caller.Create
+        ("App_State Has_Text_Delta independent of Text_Emitted",
+         Pi_Acme_App_Tests.Test_State_Has_Text_Delta_Independent'Access));
+      Result.Add_Test (App_State_Caller.Create
+        ("App_State Pending_Stats gated by Has_Text_Delta",
+         Pi_Acme_App_Tests.Test_State_Pending_Stats_Gated_By_Text_Delta
+           'Access));
+      Result.Add_Test (App_State_Caller.Create
+        ("Edit_Diff_Lines: identical texts return (no changes)",
+         Pi_Acme_App_Tests.Test_Edit_Diff_No_Change'Access));
+      Result.Add_Test (App_State_Caller.Create
+        ("Edit_Diff_Lines: changed line shows - and + lines",
+         Pi_Acme_App_Tests.Test_Edit_Diff_Single_Substitution'Access));
+      Result.Add_Test (App_State_Caller.Create
+        ("Edit_Diff_Lines: added lines appear as + lines",
+         Pi_Acme_App_Tests.Test_Edit_Diff_Added_Lines'Access));
+      Result.Add_Test (App_State_Caller.Create
+        ("Edit_Diff_Lines: removed lines appear as - lines",
+         Pi_Acme_App_Tests.Test_Edit_Diff_Removed_Lines'Access));
+      Result.Add_Test (App_State_Caller.Create
+        ("Edit_Diff_Lines: output contains no ---/+++/@@ headers",
+         Pi_Acme_App_Tests.Test_Edit_Diff_No_Headers'Access));
+      Result.Add_Test (App_State_Caller.Create
+        ("Edit_Diff_Lines: diff > Max_L lines is truncated with trailer",
+         Pi_Acme_App_Tests.Test_Edit_Diff_Truncation'Access));
+      Result.Add_Test (App_State_Caller.Create
+        ("Edit_Diff_Lines: UTF-8 bytes in context lines preserved",
+         Pi_Acme_App_Tests.Test_Edit_Diff_Utf8_Context_Line'Access));
+      Result.Add_Test (App_State_Caller.Create
+        ("Edit_Diff_Lines: UTF-8 bytes in removed lines preserved",
+         Pi_Acme_App_Tests.Test_Edit_Diff_Utf8_Removed_Line'Access));
+      Result.Add_Test (App_State_Caller.Create
+        ("Edit_Diff_Lines: UTF-8 bytes in added lines preserved",
+         Pi_Acme_App_Tests.Test_Edit_Diff_Utf8_Added_Line'Access));
+      Result.Add_Test (App_State_Caller.Create
+        ("Edit_Diff_Lines: no double-encoding under -gnatW8 (regression)",
+         Pi_Acme_App_Tests.Test_Edit_Diff_No_Double_Encoding'Access));
+      Result.Add_Test (App_State_Caller.Create
+        ("JSON_Scalar_Image: string value returned without quotes",
+         Pi_Acme_App_Tests.Test_JSON_Scalar_String'Access));
+      Result.Add_Test (App_State_Caller.Create
+        ("JSON_Scalar_Image: integer value serialised as numeric string",
+         Pi_Acme_App_Tests.Test_JSON_Scalar_Integer'Access));
+      Result.Add_Test (App_State_Caller.Create
+        ("JSON_Scalar_Image: negative integer serialised correctly",
+         Pi_Acme_App_Tests.Test_JSON_Scalar_Negative_Integer'Access));
+      Result.Add_Test (App_State_Caller.Create
+        ("JSON_Scalar_Image: boolean true serialises to ""true""",
+         Pi_Acme_App_Tests.Test_JSON_Scalar_Boolean_True'Access));
+      Result.Add_Test (App_State_Caller.Create
+        ("JSON_Scalar_Image: boolean false serialises to ""false""",
+         Pi_Acme_App_Tests.Test_JSON_Scalar_Boolean_False'Access));
+      Result.Add_Test (App_State_Caller.Create
+        ("JSON_Scalar_Image: float value serialises to non-empty string",
+         Pi_Acme_App_Tests.Test_JSON_Scalar_Float'Access));
+      Result.Add_Test (App_State_Caller.Create
+        ("JSON_Scalar_Image: null value returns ""...""",
+         Pi_Acme_App_Tests.Test_JSON_Scalar_Null'Access));
+      Result.Add_Test (App_State_Caller.Create
+        ("JSON_Scalar_Image: object value returns ""...""",
+         Pi_Acme_App_Tests.Test_JSON_Scalar_Object'Access));
+      Result.Add_Test (App_State_Caller.Create
+        ("JSON_Scalar_Image: array value returns ""...""",
+         Pi_Acme_App_Tests.Test_JSON_Scalar_Array'Access));
 
       --  Session_History integration tests (require live acme)
       Result.Add_Test (Session_History_Caller.Create
@@ -447,6 +538,27 @@ package body Test_Suites is
       Result.Add_Test (Tool_URI_Caller.Create
         ("Scan_Tool_Token: anchor in second of two tokens",
          Tool_URI_Tests.Test_Scan_Second_Of_Two'Access));
+      Result.Add_Test (Tool_URI_Caller.Create
+        ("Scan_Fork_Token: anchor in fork token",
+         Tool_URI_Tests.Test_Scan_Fork_Basic'Access));
+      Result.Add_Test (Tool_URI_Caller.Create
+        ("Scan_Fork_Token: anchor before token",
+         Tool_URI_Tests.Test_Scan_Fork_Before'Access));
+      Result.Add_Test (Tool_URI_Caller.Create
+        ("Scan_Fork_Token: anchor after token",
+         Tool_URI_Tests.Test_Scan_Fork_After'Access));
+      Result.Add_Test (Tool_URI_Caller.Create
+        ("Scan_Fork_Token: empty context",
+         Tool_URI_Tests.Test_Scan_Fork_Empty'Access));
+      Result.Add_Test (Tool_URI_Caller.Create
+        ("Scan_Fork_Token: non-zero Ctx_Start",
+         Tool_URI_Tests.Test_Scan_Fork_Ctx_Start'Access));
+      Result.Add_Test (Tool_URI_Caller.Create
+        ("Scan_Fork_Token: missing UUID",
+         Tool_URI_Tests.Test_Scan_Fork_No_Uuid'Access));
+      Result.Add_Test (Tool_URI_Caller.Create
+        ("Scan_Fork_Token: missing turn number",
+         Tool_URI_Tests.Test_Scan_Fork_No_Turn'Access));
 
       return Result;
    end Suite;

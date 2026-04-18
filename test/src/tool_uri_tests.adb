@@ -304,4 +304,87 @@ package body Tool_URI_Tests is
          "Anchor in second token should return second token");
    end Test_Scan_Second_Of_Two;
 
+   --  ── Scan_Fork_Token ───────────────────────────────────────────────────
+
+   --  Representative valid token used across the fork tests.
+   --  Format:  fork+<PID>/<UUID>/<TURN>
+   Fork_Token : constant String :=
+     "fork+12345/abc123ef-0000-4000-8000-ffffffffffff/7";
+
+   procedure Test_Scan_Fork_Basic (T : in out Test) is
+      pragma Unreferenced (T);
+      Context : constant String := Fork_Token;
+      Anchor  : constant Natural := Fork_Token'Length / 2;
+   begin
+      Assert
+        (Scan_Fork_Token (Context, 0, Anchor) = Fork_Token,
+         "Anchor in middle of fork token should return the token");
+   end Test_Scan_Fork_Basic;
+
+   procedure Test_Scan_Fork_Before (T : in out Test) is
+      pragma Unreferenced (T);
+      Pad     : constant String := "xxx";
+      Context : constant String := Pad & Fork_Token;
+      --  Anchor falls in the padding, before the token.
+      Anchor  : constant Natural := Pad'Length - 1;
+   begin
+      Assert
+        (Scan_Fork_Token (Context, 0, Anchor) = "",
+         "Anchor before fork token should return empty");
+   end Test_Scan_Fork_Before;
+
+   procedure Test_Scan_Fork_After (T : in out Test) is
+      pragma Unreferenced (T);
+      Context : constant String := Fork_Token & "zzz";
+      --  Anchor falls one position past the last character of the token.
+      Anchor  : constant Natural := Fork_Token'Length;
+   begin
+      Assert
+        (Scan_Fork_Token (Context, 0, Anchor) = "",
+         "Anchor one position after fork token should return empty");
+   end Test_Scan_Fork_After;
+
+   procedure Test_Scan_Fork_Empty (T : in out Test) is
+      pragma Unreferenced (T);
+   begin
+      Assert
+        (Scan_Fork_Token ("", 0, 0) = "",
+         "Empty context should return empty");
+   end Test_Scan_Fork_Empty;
+
+   procedure Test_Scan_Fork_Ctx_Start (T : in out Test) is
+      pragma Unreferenced (T);
+      Ctx_Start : constant Natural := 500;
+      Context   : constant String  := Fork_Token;
+      --  Anchor expressed as a body rune offset (Ctx_Start + local offset).
+      Anchor    : constant Natural :=
+        Ctx_Start + Fork_Token'Length / 2;
+   begin
+      Assert
+        (Scan_Fork_Token (Context, Ctx_Start, Anchor) = Fork_Token,
+         "Non-zero Ctx_Start should shift positions correctly");
+   end Test_Scan_Fork_Ctx_Start;
+
+   procedure Test_Scan_Fork_No_Uuid (T : in out Test) is
+      pragma Unreferenced (T);
+      --  Two consecutive slashes — UUID part is empty.
+      Bad     : constant String := "fork+99//3";
+      Anchor  : constant Natural := Bad'Length / 2;
+   begin
+      Assert
+        (Scan_Fork_Token (Bad, 0, Anchor) = "",
+         "Empty UUID part should not be recognised as a fork token");
+   end Test_Scan_Fork_No_Uuid;
+
+   procedure Test_Scan_Fork_No_Turn (T : in out Test) is
+      pragma Unreferenced (T);
+      --  Trailing slash but no turn digits.
+      Bad    : constant String := "fork+99/abcdef-1234/";
+      Anchor : constant Natural := Bad'Length / 2;
+   begin
+      Assert
+        (Scan_Fork_Token (Bad, 0, Anchor) = "",
+         "Missing turn number should not be recognised as a fork token");
+   end Test_Scan_Fork_No_Turn;
+
 end Tool_URI_Tests;

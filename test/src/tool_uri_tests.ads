@@ -80,4 +80,27 @@ package Tool_URI_Tests is
    --  Two tokens in the context; anchor selects the second one.
    procedure Test_Scan_Second_Of_Two       (T : in out Test);
 
+   --  ── Scan_Fork_Token ───────────────────────────────────────────────────
+
+   --  Anchor inside a valid fork+PID/UUID/N token → token returned.
+   procedure Test_Scan_Fork_Basic          (T : in out Test);
+
+   --  Anchor one position before the token → "".
+   procedure Test_Scan_Fork_Before         (T : in out Test);
+
+   --  Anchor one position after the token → "".
+   procedure Test_Scan_Fork_After          (T : in out Test);
+
+   --  Empty context → "".
+   procedure Test_Scan_Fork_Empty          (T : in out Test);
+
+   --  Non-zero Ctx_Start shifts positions correctly.
+   procedure Test_Scan_Fork_Ctx_Start      (T : in out Test);
+
+   --  Missing UUID part (two consecutive slashes) → not recognised.
+   procedure Test_Scan_Fork_No_Uuid        (T : in out Test);
+
+   --  Missing turn-N part (trailing slash only) → not recognised.
+   procedure Test_Scan_Fork_No_Turn        (T : in out Test);
+
 end Tool_URI_Tests;

@@ -556,7 +556,7 @@ package body Session_History_Tests is
    procedure Test_Render_Separator (T : in out Test) is
       pragma Unreferenced (T);
       UUID : constant String := "test-piacme-render-sep";
-      --  UC_DBL_H  U+2550  (used in SEPARATOR)
+      --  UC_DBL_H  U+2550  (used in Format_Separator)
       UC_Dbl_H : constant String :=
         Character'Val (16#E2#)
         & Character'Val (16#95#)
@@ -566,13 +566,20 @@ package body Session_History_Tests is
          return;
       end if;
       declare
+         --  A complete turn requires both a user message and an assistant
+         --  text message; the separator is only emitted after a complete turn.
          Path : constant String := Write_Session
            (UUID,
             Session_Header (UUID)
             & "{""type"":""message"","
             & """message"":{""role"":""user"","
             & """content"":[{""type"":""text"","
-            & """text"":""One""}]}}"
+            & """text"":""Hello""}]}}"
+            & ASCII.LF
+            & "{""type"":""message"","
+            & """message"":{""role"":""assistant"","
+            & """content"":[{""type"":""text"","
+            & """text"":""World""}]}}"
             & ASCII.LF);
          pragma Unreferenced (Path);
          FS    : aliased Nine_P.Client.Fs :=
@@ -589,7 +596,11 @@ package body Session_History_Tests is
               Read_Via_9p ("acme/" & Id & "/body");
          begin
             Assert (Contains (Body_Text, UC_Dbl_H),
-                    "SEPARATOR should be appended after the history");
+                    "double-line separator should appear after complete turn");
+            Assert (Contains (Body_Text, "fork+"),
+                    "fork+ token should be present in separator");
+            Assert (State.Turn_Count = 1,
+                    "Turn_Count should be 1 after one complete turn");
          end;
          Acme.Window.Ctl (Win, FS'Access, "clean");
          Acme.Window.Ctl (Win, FS'Access, "del");

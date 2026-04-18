@@ -51,4 +51,24 @@ package Session_Lister is
    --  locate sessions created in other directories.
    function Find_Session_File (UUID : String) return String;
 
+   --  Create a new session JSONL file containing the conversation history
+   --  from Source_UUID up to and including After_Turn complete turns.
+   --
+   --  A "complete turn" is one user message plus all subsequent assistant
+   --  and tool-result messages up to (but not including) the next user
+   --  message.  After_Turn = 1 forks after the first round-trip.
+   --
+   --  The new file is written to Sessions_Dir(Target_Cwd) and is named
+   --  <new-uuid>.jsonl.  Its header line carries the new UUID and the
+   --  current timestamp; a session_info line names it
+   --  "Fork of <original-name> @<After_Turn>".
+   --
+   --  Returns the new UUID on success, "" on any error (source not found,
+   --  After_Turn exceeds the number of complete turns in the source, I/O
+   --  failure, etc.).
+   function Fork_Session
+     (Source_UUID : String;
+      After_Turn  : Positive;
+      Target_Cwd  : String) return String;
+
 end Session_Lister;

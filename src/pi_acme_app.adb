@@ -7,6 +7,7 @@ with Ada.Command_Line;
 with Ada.Containers.Vectors;
 with Ada.Directories;
 with Ada.Exceptions;
+with Ada.Streams.Stream_IO;
 with Ada.Strings.Fixed;
 with Ada.Strings.Unbounded; use Ada.Strings.Unbounded;
 with Ada.Text_IO;
@@ -67,6 +68,8 @@ package body Pi_Acme_App is
      Character'Val (16#E2#) & Character'Val (16#80#) & Character'Val (16#A6#);
    UC_HORIZ  : constant String :=  --  ─  U+2500
      Character'Val (16#E2#) & Character'Val (16#94#) & Character'Val (16#80#);
+   UC_RETRY  : constant String :=  --  ↻  U+21BB
+     Character'Val (16#E2#) & Character'Val (16#86#) & Character'Val (16#BB#);
 
    --  ── App_State body ────────────────────────────────────────────────────
 
@@ -81,12 +84,15 @@ package body Pi_Acme_App is
       function Current_Thinking   return String  is
         (To_String (P_Thinking));
       function Is_Streaming       return Boolean is (P_Streaming);
+      function Is_Compacting      return Boolean is (P_Compacting);
       function Was_Aborted        return Boolean is (P_Aborted);
       function Text_Emitted       return Boolean is (P_Text_Emitted);
+      function Has_Text_Delta     return Boolean is (P_Has_Text_Delta);
       function Pending_Stats      return Boolean is (P_Pending_Stats);
       function Context_Window     return Natural is (P_Ctx_Win);
       function Turn_Input_Tokens  return Natural is (P_Turn_In);
       function Turn_Output_Tokens return Natural is (P_Turn_Out);
+      function Turn_Count         return Natural is (P_Turn_Count);
       function Win_Name           return String  is
         (To_String (P_Win_Name));
 
@@ -115,6 +121,11 @@ package body Pi_Acme_App is
          P_Streaming := Value;
       end Set_Streaming;
 
+      procedure Set_Compacting (Value : Boolean) is
+      begin
+         P_Compacting := Value;
+      end Set_Compacting;
+
       procedure Set_Aborted (Value : Boolean) is
       begin
          P_Aborted := Value;
@@ -124,6 +135,11 @@ package body Pi_Acme_App is
       begin
          P_Text_Emitted := Value;
       end Set_Text_Emitted;
+
+      procedure Set_Has_Text_Delta (Value : Boolean) is
+      begin
+         P_Has_Text_Delta := Value;
+      end Set_Has_Text_Delta;
 
       procedure Set_Pending_Stats (Value : Boolean) is
       begin
@@ -145,6 +161,21 @@ package body Pi_Acme_App is
       begin
          P_Win_Name := To_Unbounded_String (Name);
       end Set_Win_Name;
+
+      procedure Increment_Turn_Count is
+      begin
+         P_Turn_Count := P_Turn_Count + 1;
+      end Increment_Turn_Count;
+
+      procedure Set_Turn_Count (N : Natural) is
+      begin
+         P_Turn_Count := N;
+      end Set_Turn_Count;
+
+      procedure Reset_Turn_Count is
+      begin
+         P_Turn_Count := 0;
+      end Reset_Turn_Count;
 
       procedure Signal_Shutdown is
       begin
@@ -336,6 +367,93 @@ package body Pi_Acme_App is
       return "";
    end Scan_Tool_Token;
 
+   --  ── Scan_Fork_Token ───────────────────────────────────────────────────
+   --
+   --  Scan Context (body bytes starting at rune Ctx_Start) for a
+   --  fork+PID/UUID/N token that contains rune position Anchor.
+   --  Returns the token string, or "" if not found.
+   --
+   --  The token pattern is:
+   --    fork+ [0-9]+ / [0-9a-f-]+ / [0-9]+
+   --
+   --  The same ASCII-only rune-offset approximation as Scan_Tool_Token.
+   function Scan_Fork_Token
+     (Context   : String;
+      Ctx_Start : Natural;
+      Anchor    : Natural) return String
+   is
+      Prefix   : constant String  := "fork+";
+      Pref_Len : constant Natural := Prefix'Length;
+   begin
+      if Context'Length < Pref_Len then
+         return "";
+      end if;
+      for I in Context'First .. Context'Last - Pref_Len + 1 loop
+         if Context (I .. I + Pref_Len - 1) = Prefix then
+            --  Advance past PID digits: [0-9]+
+            declare
+               J : Natural := I + Pref_Len;
+            begin
+               while J <= Context'Last
+                 and then Context (J) in '0' .. '9'
+               loop
+                  J := J + 1;
+               end loop;
+               --  Require at least one digit, then '/'.
+               if J > I + Pref_Len
+                 and then J <= Context'Last
+                 and then Context (J) = '/'
+               then
+                  --  Advance past UUID chars: [0-9a-f-]+
+                  declare
+                     K : Natural := J + 1;
+                  begin
+                     while K <= Context'Last
+                       and then
+                         (Context (K) in '0' .. '9' | 'a' .. 'f' | '-')
+                     loop
+                        K := K + 1;
+                     end loop;
+                     --  Require at least one UUID char, then '/'.
+                     if K > J + 1
+                       and then K <= Context'Last
+                       and then Context (K) = '/'
+                     then
+                        --  Advance past turn digits: [0-9]+
+                        declare
+                           L : Natural := K + 1;
+                        begin
+                           while L <= Context'Last
+                             and then Context (L) in '0' .. '9'
+                           loop
+                              L := L + 1;
+                           end loop;
+                           --  Require at least one digit.
+                           if L > K + 1 then
+                              --  Token is Context(I .. L-1).
+                              declare
+                                 Tok_Q0 : constant Natural :=
+                                   Ctx_Start + (I - Context'First);
+                                 Tok_Q1 : constant Natural :=
+                                   Ctx_Start + (L - 1 - Context'First);
+                              begin
+                                 if Tok_Q0 <= Anchor
+                                   and then Anchor <= Tok_Q1
+                                 then
+                                    return Context (I .. L - 1);
+                                 end if;
+                              end;
+                           end if;
+                        end;
+                     end if;
+                  end;
+               end if;
+            end;
+         end if;
+      end loop;
+      return "";
+   end Scan_Fork_Token;
+
    --  Build the one-line status string.
    function Format_Status
      (State : App_State;
@@ -431,6 +549,23 @@ package body Pi_Acme_App is
       return JSON_Null;
    end Get_Object;
 
+   --  Return a human-readable string for a scalar JSON value.
+   --  Strings are returned as-is (no quotes); integers, booleans and
+   --  floats are serialised via GNATCOLL.JSON.Write; compound or null
+   --  values produce "...".
+   function JSON_Scalar_Image (Val : JSON_Value) return String is
+   begin
+      if Val.Kind = JSON_String_Type then
+         return Val.Get;
+      elsif Val.Kind in
+        JSON_Int_Type | JSON_Boolean_Type | JSON_Float_Type
+      then
+         return Val.Write;
+      else
+         return "...";
+      end if;
+   end JSON_Scalar_Image;
+
    --  ── Plumb message parsing ─────────────────────────────────────────────
    --
    --  A plumb message is 7 newline-separated fields:
@@ -507,11 +642,185 @@ package body Pi_Acme_App is
    type Section_Kind is
      (No_Section, Thinking_Section, Text_Section, Tool_Section);
 
-   --  Separator between turns.
-   SEPARATOR : constant String :=
-     ASCII.LF & ASCII.LF
-     & Str_Repeat (UC_DBL_H, 60)   --  60 × ═
-     & ASCII.LF & ASCII.LF;
+   --  Separator between turns.  Carries a clickable fork token so that
+   --  button-3 on the separator line opens a forked session.
+   --  Format:  fork+PID/UUID/N\n════...════\n\n
+   function Format_Separator
+     (Turn_N  : Positive;
+      UUID    : String;
+      PID     : String) return String
+   is
+   begin
+      return ASCII.LF & ASCII.LF
+             & "fork+" & PID & "/" & UUID & "/"
+             & Natural_Image (Turn_N) & ASCII.LF
+             & Str_Repeat (UC_DBL_H, 60)
+             & ASCII.LF & ASCII.LF;
+   end Format_Separator;
+
+   --  ── Edit_Diff_Lines ───────────────────────────────────────────────────
+   --
+   --  Run `diff -u` on Old_Text vs New_Text, strip the ---/+++/@@ header
+   --  lines produced by unified diff, and return the remaining body lines
+   --  joined by ASCII.LF.  Truncates to Max_L body lines and appends a
+   --  trailer ("… N more lines") when the diff exceeds the limit.
+   --
+   --  Returns "(no changes)" when Old_Text = New_Text or when the diff
+   --  produces no body lines.  Returns "(diff error)" if the subprocess
+   --  cannot be started.
+   --
+   --  Matches the behaviour of the Python reference's edit_diff_lines().
+
+   function Edit_Diff_Lines
+     (Old_Text : String;
+      New_Text : String;
+      Max_L    : Positive := 30) return String
+   is
+      use GNATCOLL.OS.FS;
+      use GNATCOLL.OS.Process;
+
+      Pid_S  : constant String :=
+        Natural_Image (Natural (Getpid));
+      Old_F  : constant String :=
+        "/tmp/pi-acme-diff-" & Pid_S & "-old";
+      New_F  : constant String :=
+        "/tmp/pi-acme-diff-" & Pid_S & "-new";
+
+      --  Write Text to a temporary file at Path using binary stream I/O.
+      --  Ada.Streams.Stream_IO is used instead of Ada.Text_IO so that the
+      --  raw UTF-8 bytes are written as-is.  Ada.Text_IO.Put with -gnatW8
+      --  re-encodes each Latin-1 byte > 16#7F# as a UTF-8 sequence,
+      --  double-encoding content that is already UTF-8.
+      procedure Write_Temp (Path : String; Text : String) is
+         use Ada.Streams.Stream_IO;
+         File : File_Type;
+      begin
+         Create (File, Out_File, Path);
+         String'Write (Stream (File), Text);
+         Close (File);
+      end Write_Temp;
+
+      Buffer : Unbounded_String;
+
+   begin
+      if Old_Text = New_Text then
+         return "(no changes)";
+      end if;
+
+      Write_Temp (Old_F, Old_Text);
+      Write_Temp (New_F, New_Text);
+
+      --  Spawn diff -u and capture stdout.
+      declare
+         Stdout_R, Stdout_W : File_Descriptor;
+         Null_In  : constant File_Descriptor :=
+           Open (Null_File, Read_Mode);
+         Null_Out : constant File_Descriptor :=
+           Open (Null_File, Write_Mode);
+         Args     : Argument_List;
+         Handle   : Process_Handle;
+         Chunk    : String (1 .. 4096);
+         N        : Integer;
+      begin
+         Open_Pipe (Stdout_R, Stdout_W);
+         Args.Append ("diff");
+         Args.Append ("-u");
+         Args.Append (Old_F);
+         Args.Append (New_F);
+         Handle := Start (Args   => Args,
+                          Stdin  => Null_In,
+                          Stdout => Stdout_W,
+                          Stderr => Null_Out);
+         Close (Null_In);
+         Close (Stdout_W);
+         Close (Null_Out);
+         loop
+            N := Read (Stdout_R, Chunk);
+            exit when N <= 0;
+            Append (Buffer, Chunk (1 .. N));
+         end loop;
+         Close (Stdout_R);
+         declare
+            Dummy : constant Integer := Wait (Handle);
+            pragma Unreferenced (Dummy);
+         begin
+            null;
+         end;
+      end;
+
+      --  Delete temp files (ignore errors).
+      begin
+         Ada.Directories.Delete_File (Old_F);
+      exception
+         when others => null;
+      end;
+      begin
+         Ada.Directories.Delete_File (New_F);
+      exception
+         when others => null;
+      end;
+
+      --  Parse diff output: skip ---/+++/@@ lines; collect body lines;
+      --  truncate to Max_L with an ellipsis trailer.
+      declare
+         Raw        : constant String  := To_String (Buffer);
+         Result     : Unbounded_String;
+         Line_Start : Natural          := Raw'First;
+         Line_Count : Natural          := 0;
+         Skipped    : Natural          := 0;
+
+         --  Append one body line (without its terminating newline) to
+         --  Result, respecting the Max_L truncation limit.
+         procedure Process_Line (L : String) is
+            Skip : constant Boolean :=
+              (L'Length >= 3
+                 and then L (L'First .. L'First + 2) = "---")
+              or else (L'Length >= 3
+                 and then L (L'First .. L'First + 2) = "+++")
+              or else (L'Length >= 2
+                 and then L (L'First .. L'First + 1) = "@@");
+         begin
+            if Skip then
+               return;
+            end if;
+            if Line_Count < Max_L then
+               if Length (Result) > 0 then
+                  Append (Result, ASCII.LF);
+               end if;
+               Append (Result, L);
+               Line_Count := Line_Count + 1;
+            else
+               Skipped := Skipped + 1;
+            end if;
+         end Process_Line;
+
+      begin
+         for I in Raw'Range loop
+            if Raw (I) = ASCII.LF then
+               Process_Line (Raw (Line_Start .. I - 1));
+               Line_Start := I + 1;
+            end if;
+         end loop;
+         --  Last line when the diff output has no trailing newline.
+         if Line_Start <= Raw'Last then
+            Process_Line (Raw (Line_Start .. Raw'Last));
+         end if;
+         if Skipped > 0 then
+            if Length (Result) > 0 then
+               Append (Result, ASCII.LF);
+            end if;
+            Append
+              (Result,
+               UC_ELLIP & " " & Natural_Image (Skipped) & " more lines");
+         end if;
+         if Length (Result) = 0 then
+            return "(no changes)";
+         end if;
+         return To_String (Result);
+      end;
+   exception
+      when others => return "(diff error)";
+   end Edit_Diff_Lines;
 
    procedure Dispatch_Pi_Event
      (Event   :     JSON_Value;
@@ -528,6 +837,7 @@ package body Pi_Acme_App is
       if Kind = "agent_start" then
          State.Set_Streaming (True);
          State.Set_Text_Emitted (False);
+         State.Set_Has_Text_Delta (False);
          Section := No_Section;
          Acme.Window.Replace_Line1
            (Win, FS, Format_Status (State, "running"));
@@ -547,12 +857,15 @@ package body Pi_Acme_App is
                & UC_WARN & " No response -- context may be full. Try New."
                & ASCII.LF);
          end if;
-         State.Set_Pending_Stats (True);
-         Pi_RPC.Send (Proc, "{""type"":""get_session_stats""}");
+         --  Only emit the stats summary and turn separator when the
+         --  agent produced an actual text response.  Tool-only intermediate
+         --  turns are silently skipped.
+         if State.Has_Text_Delta then
+            State.Set_Pending_Stats (True);
+            Pi_RPC.Send (Proc, "{""type"":""get_session_stats""}");
+         end if;
          Acme.Window.Replace_Line1
            (Win, FS, Format_Status (State, "ready"));
-
-      --  ── message_update ────────────────────────────────────────────────
       elsif Kind = "message_update" then
          declare
             Sub      : constant JSON_Value :=
@@ -602,6 +915,7 @@ package body Pi_Acme_App is
                   Section := Text_Section;
                end if;
                State.Set_Text_Emitted (True);
+               State.Set_Has_Text_Delta (True);
                Acme.Window.Append
                  (Win, FS, Get_String (Sub, "delta"));
 
@@ -639,12 +953,39 @@ package body Pi_Acme_App is
                  (Win, FS,
                   ASCII.LF & UC_BOX_TL & " " & UC_GEAR & " " & Tool);
             end if;
-            --  Show key args (skip oldText/newText — too long)
+            --  Show key args.  For the edit tool, display the file path
+            --  followed by a compact unified diff of oldText vs newText,
+            --  matching the Python reference's edit_diff_lines() output.
             if Tool = "edit" then
-               Acme.Window.Append
-                 (Win, FS,
-                  ASCII.LF & UC_BOX_V & " path: "
-                  & Get_String (Args, "path"));
+               declare
+                  Edit_Path : constant String :=
+                    Get_String (Args, "path");
+                  Diff_Body : constant String :=
+                    Edit_Diff_Lines
+                      (Get_String (Args, "oldText"),
+                       Get_String (Args, "newText"));
+                  Diff_Pos  : Natural := Diff_Body'First;
+               begin
+                  Acme.Window.Append
+                    (Win, FS,
+                     ASCII.LF & UC_BOX_V & " path: " & Edit_Path);
+                  --  Append each diff body line with the │ prefix.
+                  for I in Diff_Body'Range loop
+                     if Diff_Body (I) = ASCII.LF then
+                        Acme.Window.Append
+                          (Win, FS,
+                           ASCII.LF & UC_BOX_V & " "
+                           & Diff_Body (Diff_Pos .. I - 1));
+                        Diff_Pos := I + 1;
+                     end if;
+                  end loop;
+                  if Diff_Pos <= Diff_Body'Last then
+                     Acme.Window.Append
+                       (Win, FS,
+                        ASCII.LF & UC_BOX_V & " "
+                        & Diff_Body (Diff_Pos .. Diff_Body'Last));
+                  end if;
+               end;
             elsif Args.Kind = JSON_Object_Type then
                declare
                   procedure Show_Field
@@ -655,9 +996,7 @@ package body Pi_Acme_App is
                      if Name not in "oldText" | "newText" then
                         declare
                            Text    : constant String :=
-                             (if Value.Kind = JSON_String_Type
-                              then Value.Get
-                              else "...");
+                             JSON_Scalar_Image (Value);
                            Trimmed : constant String :=
                              (if Text'Length > 200
                               then Text (Text'First
@@ -726,34 +1065,186 @@ package body Pi_Acme_App is
             end if;
          end;
 
-      --  ── model_select ──────────────────────────────────────────────────
-      elsif Kind = "model_select" then
+      --  ── auto_retry_start ──────────────────────────────────────────────
+      --  Emitted by pi before each retry attempt.  Show a compact notice
+      --  so the user can see why the turn is being retried and how long
+      --  the backoff delay is.
+      elsif Kind = "auto_retry_start" then
          declare
-            Model_Val  : constant JSON_Value :=
-              Get_Object (Event, "model");
-            Provider   : constant String     :=
-              Get_String (Model_Val, "provider");
-            Model_Id   : constant String     :=
-              Get_String (Model_Val, "id");
-            Ctx_Window : constant Natural    :=
-              Get_Integer (Model_Val, "contextWindow");
+            Attempt     : constant Natural :=
+              Get_Integer (Event, "attempt");
+            Max_Att     : constant Natural :=
+              Get_Integer (Event, "maxAttempts");
+            Delay_Ms    : constant Natural :=
+              Get_Integer (Event, "delayMs");
+            Err_Msg     : constant String  :=
+              Get_String  (Event, "errorMessage");
+            Delay_S_Str : constant String  :=
+              (if Delay_Ms >= 1000
+               then Natural_Image (Delay_Ms / 1000) & "s"
+               else Natural_Image (Delay_Ms) & "ms");
          begin
-            if Provider'Length > 0 and then Model_Id'Length > 0 then
-               State.Set_Model (Provider & "/" & Model_Id);
-            end if;
-            if Ctx_Window > 0 then
-               State.Set_Context_Window (Ctx_Window);
-            end if;
-            Acme.Window.Replace_Line1
+            Acme.Window.Append
               (Win, FS,
-               Format_Status
-                 (State,
-                  (if State.Is_Streaming then "running" else "ready")));
+               ASCII.LF
+               & UC_RETRY & " Retry "
+               & Natural_Image (Attempt)
+               & "/" & Natural_Image (Max_Att)
+               & " in " & Delay_S_Str
+               & ": " & Err_Msg
+               & ASCII.LF);
+            Acme.Window.Replace_Line1
+              (Win, FS, Format_Status (State, "retrying"));
+         end;
+
+      --  ── auto_retry_end ────────────────────────────────────────────────
+      --  Emitted when the retry sequence concludes (success or exhausted).
+      --  On success pi immediately continues streaming so no extra note is
+      --  needed.  On failure show the final error prominently.
+      elsif Kind = "auto_retry_end" then
+         if not Get_Boolean (Event, "success") then
+            declare
+               Final_Err : constant String := Get_String (Event, "finalError");
+               Attempts  : constant Natural := Get_Integer (Event, "attempt");
+            begin
+               Acme.Window.Append
+                 (Win, FS,
+                  ASCII.LF
+                  & UC_CROSS & " Retry failed after "
+                  & Natural_Image (Attempts)
+                  & (if Attempts = 1 then " attempt" else " attempts")
+                  & (if Final_Err'Length > 0
+                     then ": " & Final_Err
+                     else "")
+                  & ASCII.LF);
+            end;
+         end if;
+
+      --  ── auto_compaction_start ────────────────────────────────────────
+      --  Emitted when pi begins auto-compacting the context (either because
+      --  the context overflowed or because the configured threshold was
+      --  crossed).  Show a compact notice and update the tag.
+      elsif Kind = "auto_compaction_start" then
+         State.Set_Compacting (True);
+         declare
+            Reason : constant String := Get_String (Event, "reason");
+            Label  : constant String :=
+              (if Reason = "overflow"
+               then "Overflow: compacting context" & UC_ELLIP
+               else "Compacting context" & UC_ELLIP);
+         begin
+            Acme.Window.Append
+              (Win, FS,
+               ASCII.LF & UC_GEAR & " " & Label & ASCII.LF);
+         end;
+         Acme.Window.Replace_Line1
+           (Win, FS, Format_Status (State, "compacting"));
+
+      --  ── auto_compaction_end ───────────────────────────────────────────
+      --  Emitted when auto-compaction finishes (success, aborted, or
+      --  error).  The three cases are distinguished by the "errorMessage",
+      --  "aborted", and "willRetry" fields.
+      elsif Kind = "auto_compaction_end" then
+         State.Set_Compacting (False);
+         declare
+            Err_Msg    : constant String  :=
+              Get_String  (Event, "errorMessage");
+            Is_Aborted : constant Boolean := Get_Boolean (Event, "aborted");
+            Will_Retry : constant Boolean := Get_Boolean (Event, "willRetry");
+         begin
+            if Err_Msg'Length > 0 then
+               Acme.Window.Append
+                 (Win, FS,
+                  ASCII.LF & UC_WARN & " Compaction failed: "
+                  & Err_Msg & ASCII.LF);
+            elsif Is_Aborted then
+               Acme.Window.Append
+                 (Win, FS,
+                  ASCII.LF & UC_CROSS & " Compaction aborted." & ASCII.LF);
+            elsif Will_Retry then
+               Acme.Window.Append
+                 (Win, FS,
+                  ASCII.LF & UC_CHECK
+                  & " Context compacted, retrying" & UC_ELLIP
+                  & ASCII.LF);
+            else
+               Acme.Window.Append
+                 (Win, FS,
+                  ASCII.LF & UC_CHECK & " Context compacted." & ASCII.LF);
+            end if;
+         end;
+         Acme.Window.Replace_Line1
+           (Win, FS,
+            Format_Status
+              (State,
+               (if State.Is_Streaming then "running" else "ready")));
+
+      --  ── extension_error ───────────────────────────────────────────────
+      --  Emitted by rpc-mode when an extension event handler throws.
+      elsif Kind = "extension_error" then
+         declare
+            Ext_Path : constant String := Get_String (Event, "extensionPath");
+            Evt_Name : constant String := Get_String (Event, "event");
+            Err_Msg  : constant String := Get_String (Event, "error");
+         begin
+            Acme.Window.Append
+              (Win, FS,
+               ASCII.LF & "[!] Extension error"
+               & (if Ext_Path'Length > 0 then " in " & Ext_Path else "")
+               & (if Evt_Name'Length > 0 then " (" & Evt_Name & ")" else "")
+               & ": " & Err_Msg & ASCII.LF);
+         end;
+
+      --  ── extension_ui_request ──────────────────────────────────────────
+      --  Emitted by rpc-mode for extension UI calls.
+      --
+      --  Fire-and-forget methods (notify, setStatus, setWidget, setTitle,
+      --  set_editor_text): only "notify" produces user-visible output; the
+      --  rest are no-ops in an acme context.
+      --
+      --  Blocking methods (select, confirm, input, editor): pi awaits a
+      --  matching extension_ui_response on stdin.  Without one, any
+      --  extension that opens a dialog hangs indefinitely.  We immediately
+      --  respond with cancelled:true so control returns to the extension.
+      elsif Kind = "extension_ui_request" then
+         declare
+            Method : constant String := Get_String (Event, "method");
+            Id     : constant String := Get_String (Event, "id");
+         begin
+            if Method = "notify" then
+               declare
+                  Msg : constant String := Get_String (Event, "message");
+               begin
+                  if Msg'Length > 0 then
+                     Acme.Window.Append
+                       (Win, FS,
+                        ASCII.LF & UC_BULLET & " " & Msg & ASCII.LF);
+                  end if;
+               end;
+            elsif Method in "select" | "confirm" | "input" | "editor" then
+               --  Blocking dialog: respond cancelled so the extension does
+               --  not hang.  Interactive dialogs are not implemented in the
+               --  acme frontend.
+               if Id'Length > 0 then
+                  Pi_RPC.Send
+                    (Proc,
+                     "{""type"":""extension_ui_response"","
+                     & """id"":""" & Id & ""","
+                     & """cancelled"":true}");
+               end if;
+            end if;
+            --  setStatus, setWidget, setTitle, set_editor_text:
+            --  silently ignored — not applicable to an acme window.
          end;
 
       --  ── response (RPC reply) ──────────────────────────────────────────
       elsif Kind = "response" then
          if not Get_Boolean (Event, "success") then
+            --  Clear compacting flag if a compact command failed so the
+            --  button becomes usable again.
+            if Get_String (Event, "command") = "compact" then
+               State.Set_Compacting (False);
+            end if;
             Acme.Window.Append
               (Win, FS,
                ASCII.LF & UC_WARN & " pi error: "
@@ -809,6 +1300,7 @@ package body Pi_Acme_App is
 
                elsif Command = "new_session" then
                   State.Set_Turn_Tokens (0, 0);
+                  State.Reset_Turn_Count;
                   Pi_RPC.Send (Proc, "{""type"":""get_state""}");
 
                elsif Command = "get_session_stats" then
@@ -853,8 +1345,69 @@ package body Pi_Acme_App is
                               & To_String (Parts) & "]" & ASCII.LF);
                         end if;
                      end;
-                     Acme.Window.Append (Win, FS, SEPARATOR);
+                     State.Increment_Turn_Count;
+                     Acme.Window.Append
+                       (Win, FS,
+                        Format_Separator
+                          (State.Turn_Count,
+                           State.Session_Id,
+                           Natural_Image (Natural (Getpid))));
                   end if;
+                  Acme.Window.Replace_Line1
+                    (Win, FS, Format_Status (State, "ready"));
+
+               elsif Command = "set_model" then
+                  --  The response data IS the accepted model object.
+                  --  Update state now that pi has confirmed the switch.
+                  declare
+                     Provider   : constant String  :=
+                       Get_String  (Data, "provider");
+                     Model_Id   : constant String  :=
+                       Get_String  (Data, "id");
+                     Ctx_Window : constant Natural :=
+                       Get_Integer (Data, "contextWindow");
+                  begin
+                     if Provider'Length > 0 and then Model_Id'Length > 0 then
+                        State.Set_Model (Provider & "/" & Model_Id);
+                     end if;
+                     if Ctx_Window > 0 then
+                        State.Set_Context_Window (Ctx_Window);
+                     end if;
+                  end;
+                  Acme.Window.Replace_Line1
+                    (Win, FS,
+                     Format_Status
+                       (State,
+                        (if State.Is_Streaming then "running" else "ready")));
+
+               elsif Command = "set_thinking_level" then
+                  --  The new thinking level was already stored in App_State
+                  --  by Plumb_Thinking_Task before the command was sent.
+                  --  Refresh the tag so the change is visible immediately.
+                  Acme.Window.Replace_Line1
+                    (Win, FS,
+                     Format_Status
+                       (State,
+                        (if State.Is_Streaming then "running" else "ready")));
+
+               elsif Command = "compact" then
+                  --  Manual compaction completed.  Show a summary line with
+                  --  the token count before compaction, then return to ready.
+                  State.Set_Compacting (False);
+                  declare
+                     Tokens_Before : constant Natural :=
+                       Get_Integer (Data, "tokensBefore");
+                  begin
+                     Acme.Window.Append
+                       (Win, FS,
+                        ASCII.LF & UC_CHECK & " Context compacted"
+                        & (if Tokens_Before > 0
+                           then " (was "
+                                & Format_Kilo (Tokens_Before)
+                                & " tokens)"
+                           else "")
+                        & "." & ASCII.LF);
+                  end;
                   Acme.Window.Replace_Line1
                     (Win, FS, Format_Status (State, "ready"));
                end if;
@@ -1117,6 +1670,10 @@ package body Pi_Acme_App is
       Last_Output  : Natural         := 0;
       Cur_Model    : Unbounded_String :=
         To_Unbounded_String (State.Current_Model);
+      PID_Str        : constant String := Natural_Image (Natural (Getpid));
+      Turns_Rendered : Natural         := 0;
+      In_Turn        : Boolean         := False;
+      Saw_Asst_Text  : Boolean         := False;
 
       --  Append Thinking text to Buf with "│ " prefix on every line.
       procedure Render_Thinking_Block (Thinking : String) is
@@ -1359,6 +1916,17 @@ package body Pi_Acme_App is
                         begin
                            --  User turn
                            if Role = "user" then
+                              --  If the previous turn was complete, emit
+                              --  its fork separator before this user msg.
+                              if In_Turn and then Saw_Asst_Text then
+                                 Turns_Rendered := Turns_Rendered + 1;
+                                 Append
+                                   (Buf,
+                                    Format_Separator
+                                      (Turns_Rendered, UUID, PID_Str));
+                              end if;
+                              In_Turn       := True;
+                              Saw_Asst_Text := False;
                               if Msg.Has_Field ("content")
                                 and then
                                   Msg.Get ("content").Kind
@@ -1503,6 +2071,7 @@ package body Pi_Acme_App is
                                                         Null_Unbounded_String;
                                                    end if;
                                                    Append (Buf, Text);
+                                                   Saw_Asst_Text := True;
                                                 end if;
                                              end;
 
@@ -1591,15 +2160,8 @@ package body Pi_Acme_App is
                                                       is
                                                          Text  : constant
                                                            String :=
-                                                             (if Value
-                                                                .Kind
-                                                              =
-                                                              JSON_String_Type
-                                                              then
-                                                                Value
-                                                                  .Get
-                                                              else
-                                                                "...");
+                                                             JSON_Scalar_Image
+                                                               (Value);
                                                          Val_S : constant
                                                            String :=
                                                              (if
@@ -1733,11 +2295,18 @@ package body Pi_Acme_App is
             return;
       end;
 
-      --  Write accumulated buffer, separator, and restore token stats.
+      --  Append separator for the final rendered turn (if any), then flush.
+      if In_Turn and then Saw_Asst_Text then
+         Turns_Rendered := Turns_Rendered + 1;
+         Append
+           (Buf,
+            Format_Separator (Turns_Rendered, UUID, PID_Str));
+      end if;
       if Length (Buf) > 0 then
          Acme.Window.Append (Win, FS, To_String (Buf));
       end if;
-      Acme.Window.Append (Win, FS, SEPARATOR);
+      --  Restore turn count so subsequent live turns are numbered correctly.
+      State.Set_Turn_Count (Turns_Rendered);
       if Last_Input > 0 or else Last_Output > 0 then
          State.Set_Turn_Tokens (Last_Input, Last_Output);
       end if;
@@ -1750,7 +2319,7 @@ package body Pi_Acme_App is
       Cwd       : constant String := Ada.Strings.Fixed.Trim
         (Ada.Command_Line.Command_Name, Ada.Strings.Both);  --  placeholder
       Tag_Extra : constant String :=
-        " | Send Stop Steer New Clear Models Sessions Thinking Stats";
+        " | Send Stop Steer New Compact Clear Models Sessions Thinking Stats";
 
       --  Process ID used to build window-specific selector tokens.
       My_PID : constant String := Natural_Image (Natural (Getpid));
@@ -1824,6 +2393,13 @@ package body Pi_Acme_App is
                         Dispatch_Pi_Event
                           (Parse_Result.Value,
                            Win, My_FS'Access, State, Section, Proc);
+                     else
+                        --  Non-JSON line on pi stdout — show it verbatim so
+                        --  plain-text warnings or startup diagnostics are
+                        --  visible rather than silently dropped.
+                        Acme.Window.Append
+                          (Win, My_FS'Access,
+                           ASCII.LF & "[pi] " & Line & ASCII.LF);
                      end if;
                   end;
                end;
@@ -2004,6 +2580,115 @@ package body Pi_Acme_App is
                return False;
          end Try_Open_Tool_URI;
 
+         --  Spawn a new pi_acme window containing the session history of
+         --  UUID truncated after After_Turn complete turns.
+         procedure Fork_And_Open (UUID : String; After_Turn : Positive) is
+            use GNATCOLL.OS.FS;
+            use GNATCOLL.OS.Process;
+            Cwd      : constant String := Ada.Directories.Current_Directory;
+            New_UUID : constant String :=
+              Session_Lister.Fork_Session (UUID, After_Turn, Cwd);
+            Null_FD  : File_Descriptor;
+            Args     : Argument_List;
+            Handle   : Process_Handle;
+            pragma Unreferenced (Handle);
+         begin
+            if New_UUID'Length = 0 then
+               Acme.Window.Append
+                 (Win, My_FS'Access,
+                  ASCII.LF & UC_WARN & " Fork failed (turn "
+                  & Natural_Image (After_Turn) & " not found in session)."
+                  & ASCII.LF);
+               return;
+            end if;
+            Null_FD := Open (Null_File, Read_Mode);
+            Args.Append (Ada.Command_Line.Command_Name);
+            Args.Append ("--session");
+            Args.Append (New_UUID);
+            Handle := Start (Args   => Args,
+                             Stdin  => Null_FD,
+                             Stdout => Null_FD,
+                             Stderr => Null_FD,
+                             Cwd    => Cwd);
+            Close (Null_FD);
+            Acme.Window.Append
+              (Win, My_FS'Access,
+               ASCII.LF & "[Forked -> "
+               & New_UUID (New_UUID'First .. New_UUID'First + 7)
+               & "...]" & ASCII.LF);
+         exception
+            when Ex : others =>
+               Acme.Window.Append
+                 (Win, My_FS'Access,
+                  ASCII.LF & UC_WARN & " Fork_And_Open: "
+                  & Ada.Exceptions.Exception_Message (Ex) & ASCII.LF);
+         end Fork_And_Open;
+
+         --  Scan a ±200-rune context window around the click for a
+         --  fork+PID/UUID/N token.  If found and the PID matches this
+         --  process, call Fork_And_Open and return True.
+         function Try_Fork_URI
+           (Ev : Acme.Event_Parser.Event) return Boolean
+         is
+            Anchor    : constant Natural :=
+              (if Ev.Eq1 > Ev.Eq0
+               then (Ev.Eq0 + Ev.Eq1) / 2
+               else Ev.Q0);
+            Ctx_Start : constant Natural :=
+              (if Anchor > 200 then Anchor - 200 else 0);
+            Ctx_End   : constant Natural := Anchor + 200;
+            Context   : constant String  :=
+              Acme.Window.Read_Chars
+                (Win, My_FS'Access, Ctx_Start, Ctx_End);
+            Token     : constant String  :=
+              Scan_Fork_Token (Context, Ctx_Start, Anchor);
+         begin
+            if Token'Length = 0 then
+               return False;
+            end if;
+            --  Parse "fork+PID/UUID/N" — split on the first and last '/'.
+            declare
+               After_Plus  : constant Natural := Token'First + 5;
+               First_Slash : Natural          := 0;
+               Last_Slash  : Natural          := 0;
+            begin
+               for I in After_Plus .. Token'Last loop
+                  if Token (I) = '/' then
+                     if First_Slash = 0 then
+                        First_Slash := I;
+                     end if;
+                     Last_Slash := I;
+                  end if;
+               end loop;
+               if First_Slash = 0 or else First_Slash = Last_Slash then
+                  return False;
+               end if;
+               declare
+                  Token_PID : constant String :=
+                    Token (After_Plus .. First_Slash - 1);
+                  Sess_UUID : constant String :=
+                    Token (First_Slash + 1 .. Last_Slash - 1);
+                  Turn_Str  : constant String :=
+                    Token (Last_Slash + 1 .. Token'Last);
+                  Turn_N    : Positive;
+               begin
+                  --  Only handle tokens addressed to this process.
+                  if Token_PID /= My_PID then
+                     return False;
+                  end if;
+                  Turn_N := Positive'Value (Turn_Str);
+                  Fork_And_Open (Sess_UUID, Turn_N);
+                  return True;
+               exception
+                  when Constraint_Error =>
+                     return False;
+               end;
+            end;
+         exception
+            when others =>
+               return False;
+         end Try_Fork_URI;
+
       begin
          loop
             declare
@@ -2062,6 +2747,24 @@ package body Pi_Acme_App is
                                  ASCII.LF
                                  & UC_HORIZ & UC_HORIZ & " New session "
                                  & UC_HORIZ & UC_HORIZ & ASCII.LF);
+                           elsif Text = "Compact" then
+                              --  Guard: do not compact while the agent is
+                              --  streaming or a compaction is already running.
+                              if not State.Is_Streaming
+                                and then not State.Is_Compacting
+                              then
+                                 State.Set_Compacting (True);
+                                 Acme.Window.Append
+                                   (Win, My_FS'Access,
+                                    ASCII.LF & UC_GEAR
+                                    & " Compacting context"
+                                    & UC_ELLIP & ASCII.LF);
+                                 Acme.Window.Replace_Line1
+                                   (Win, My_FS'Access,
+                                    Format_Status (State, "compacting"));
+                                 Pi_RPC.Send
+                                   (Proc, "{""type"":""compact""}");
+                              end if;
                            elsif Text = "Clear" then
                               Acme.Window.Ctl
                                 (Win, My_FS'Access, "addr 1,$");
@@ -2186,7 +2889,9 @@ package body Pi_Acme_App is
                            --  all or send a truncated token; we work around
                            --  this by reading a small context window and
                            --  scanning for the pattern ourselves.
-                           if not Try_Open_Tool_URI (Ev) then
+                           if not Try_Fork_URI (Ev)
+                             and then not Try_Open_Tool_URI (Ev)
+                           then
                               Acme.Window.Send_Event
                                 (Win, My_FS'Access,
                                  Ev.C1, Ev.C2, Ev.Q0, Ev.Q1);

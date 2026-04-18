@@ -9,6 +9,7 @@
 
 with Ada.Strings.Unbounded;
 with Acme.Window;
+with GNATCOLL.JSON;
 with Nine_P.Client;
 
 package Pi_Acme_App is
@@ -28,12 +29,17 @@ package Pi_Acme_App is
       function Current_Agent      return String;
       function Current_Thinking   return String;
       function Is_Streaming       return Boolean;
+      function Is_Compacting      return Boolean;
       function Was_Aborted        return Boolean;
       function Text_Emitted       return Boolean;
+      --  True only when at least one text_delta arrived in the current
+      --  agent turn (tool-only turns leave this False).
+      function Has_Text_Delta     return Boolean;
       function Pending_Stats      return Boolean;
       function Context_Window     return Natural;
       function Turn_Input_Tokens  return Natural;
       function Turn_Output_Tokens return Natural;
+      function Turn_Count         return Natural;
       function Win_Name           return String;
 
       --  Writers
@@ -42,12 +48,20 @@ package Pi_Acme_App is
       procedure Set_Agent          (Agent : String);
       procedure Set_Thinking       (Level : String);
       procedure Set_Streaming      (Value : Boolean);
+      procedure Set_Compacting     (Value : Boolean);
       procedure Set_Aborted        (Value : Boolean);
       procedure Set_Text_Emitted   (Value : Boolean);
+      procedure Set_Has_Text_Delta (Value : Boolean);
       procedure Set_Pending_Stats  (Value : Boolean);
       procedure Set_Context_Window (N     : Natural);
       procedure Set_Turn_Tokens    (Input, Output : Natural);
       procedure Set_Win_Name       (Name  : String);
+
+      --  Turn counter — incremented after each completed agent turn,
+      --  reset on new_session, and restored from history on session reload.
+      procedure Increment_Turn_Count;
+      procedure Set_Turn_Count     (N     : Natural);
+      procedure Reset_Turn_Count;
 
       --  Session reload coordination.
       --  Plumb_Session_Task calls Request_Reload then terminates the
@@ -74,14 +88,17 @@ package Pi_Acme_App is
       P_Agent         : Ada.Strings.Unbounded.Unbounded_String;
       P_Thinking      : Ada.Strings.Unbounded.Unbounded_String;
       P_Streaming     : Boolean := False;
+      P_Compacting    : Boolean := False;
       P_Aborted       : Boolean := False;
       P_Text_Emitted  : Boolean := False;
+      P_Has_Text_Delta : Boolean := False;
       P_Pending_Stats : Boolean := False;
       P_Ctx_Win       : Natural := 0;
       P_Turn_In       : Natural := 0;
       P_Turn_Out      : Natural := 0;
       P_Win_Name      : Ada.Strings.Unbounded.Unbounded_String;
       P_Shutdown      : Boolean := False;
+      P_Turn_Count    : Natural := 0;
       --  Session reload
       P_Reload_UUID      : Ada.Strings.Unbounded.Unbounded_String;
       P_Reload_Requested : Boolean := False;
@@ -137,6 +154,34 @@ package Pi_Acme_App is
      (Data       : String;
       Pid_Prefix : String) return String;
 
+   --  ── Edit diff helper ─────────────────────────────────────────────────
+
+   --  Run `diff -u` on Old_Text vs New_Text, strip the ---/+++/@@ unified
+   --  diff header lines, and return the remaining body lines joined by
+   --  ASCII.LF.  Truncates to Max_L body lines (default 30) and appends a
+   --  "… N more lines" trailer when the diff exceeds the limit.
+   --
+   --  Returns "(no changes)" when Old_Text = New_Text or when the diff
+   --  produces no body lines.  Returns "(diff error)" if the `diff`
+   --  subprocess cannot be started.
+   --
+   --  Matches the behaviour of the Python reference's edit_diff_lines().
+   function Edit_Diff_Lines
+     (Old_Text : String;
+      New_Text : String;
+      Max_L    : Positive := 30) return String;
+
+   --  ── JSON display utilities ────────────────────────────────────────────
+
+   --  Return a human-readable string for a scalar JSON value suitable for
+   --  display in tool-call argument summaries.
+   --
+   --  Strings are returned as-is (no quotation marks).  Integers, booleans,
+   --  and floats are serialised by GNATCOLL.JSON.Write (e.g. 42, true,
+   --  3.14).  Null, object, and array values return "...".
+   function JSON_Scalar_Image
+     (Val : GNATCOLL.JSON.JSON_Value) return String;
+
    --  ── Tool call URI helpers ─────────────────────────────────────────────
 
    --  Return the first 16 hex characters of the SHA-256 digest of Tool_Id,
@@ -156,6 +201,17 @@ package Pi_Acme_App is
    --  the token in the context window introduce only a small positive error
    --  that is acceptable for click-position matching.
    function Scan_Tool_Token
+     (Context   : String;
+      Ctx_Start : Natural;
+      Anchor    : Natural) return String;
+
+   --  Scan Context for a fork+PID/SESSION-UUID/TURN-N token that contains
+   --  rune position Anchor.  Returns the token string, or "".
+   --
+   --  Token pattern:  fork+ [0-9]+ / [0-9a-f-]+ / [0-9]+
+   --
+   --  The same ASCII-only approximation for rune offsets applies here.
+   function Scan_Fork_Token
      (Context   : String;
       Ctx_Start : Natural;
       Anchor    : Natural) return String;

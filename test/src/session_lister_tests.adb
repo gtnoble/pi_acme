@@ -1,6 +1,7 @@
 with AUnit.Assertions;
 with Ada.Directories;
 with Ada.Environment_Variables;
+with Ada.Strings.Fixed;
 with Ada.Strings.Unbounded; use Ada.Strings.Unbounded;
 with Ada.Text_IO;
 with Session_Lister;        use Session_Lister;
@@ -213,5 +214,191 @@ package body Session_Lister_Tests is
          Delete_Session_File (Sessions_Test_Dir_B, UUID);
          raise;
    end Test_Find_Session_File_Any_Dir;
+
+   --  ── Fork_Session ──────────────────────────────────────────────────────
+   --
+   --  Test directory used for fork source files.
+   Sessions_Fork_Dir : constant String :=
+     Ada.Environment_Variables.Value ("HOME", "")
+     & "/.pi/agent/sessions/--pi-acme-fork-test--";
+
+   --  Target CWD for forked sessions (maps to the fork test dir).
+   Fork_Target_Cwd : constant String := "/pi-acme-fork-test";
+
+   --  Build a two-turn session JSONL string.
+   --  Turn 1: user "Hello" / assistant "World"
+   --  Turn 2: user "Foo"   / assistant "Bar"
+   function Two_Turn_JSONL (UUID : String) return String is
+   begin
+      return
+        "{""type"":""session"",""id"":""" & UUID & ""","
+        & """timestamp"":""2024-01-01T00:00:00Z""}" & ASCII.LF
+        & "{""type"":""session_info"",""name"":""Original""}" & ASCII.LF
+        --  Turn 1
+        & "{""type"":""message"",""message"":{""role"":""user"","
+        & """content"":[{""type"":""text"",""text"":""Hello""}]}}"
+        & ASCII.LF
+        & "{""type"":""message"",""message"":{""role"":""assistant"","
+        & """content"":[{""type"":""text"",""text"":""World""}]}}"
+        & ASCII.LF
+        --  Turn 2
+        & "{""type"":""message"",""message"":{""role"":""user"","
+        & """content"":[{""type"":""text"",""text"":""Foo""}]}}"
+        & ASCII.LF
+        & "{""type"":""message"",""message"":{""role"":""assistant"","
+        & """content"":[{""type"":""text"",""text"":""Bar""}]}}"
+        & ASCII.LF;
+   end Two_Turn_JSONL;
+
+   --  Write a JSONL string as a session file under Sessions_Fork_Dir.
+   procedure Write_Fork_Source (UUID : String; Content : String) is
+      Path : constant String :=
+        Sessions_Fork_Dir & "/" & UUID & ".jsonl";
+      F    : Ada.Text_IO.File_Type;
+   begin
+      if not Ada.Directories.Exists (Sessions_Fork_Dir) then
+         Ada.Directories.Create_Directory (Sessions_Fork_Dir);
+      end if;
+      Ada.Text_IO.Create (F, Ada.Text_IO.Out_File, Path);
+      Ada.Text_IO.Put (F, Content);
+      Ada.Text_IO.Close (F);
+   end Write_Fork_Source;
+
+   --  Delete the source session file from Sessions_Fork_Dir.
+   procedure Delete_Fork_Source (UUID : String) is
+      Path : constant String :=
+        Sessions_Fork_Dir & "/" & UUID & ".jsonl";
+   begin
+      if Ada.Directories.Exists (Path) then
+         Ada.Directories.Delete_File (Path);
+      end if;
+   end Delete_Fork_Source;
+
+   --  Delete a fork-result session by its UUID from the target dir.
+   procedure Delete_Fork_Result (UUID : String) is
+      Target_Dir : constant String := Sessions_Dir (Fork_Target_Cwd);
+      Path       : constant String :=
+        Target_Dir & "/" & UUID & ".jsonl";
+   begin
+      if Ada.Directories.Exists (Path) then
+         Ada.Directories.Delete_File (Path);
+      end if;
+   end Delete_Fork_Result;
+
+   --  Read the whole content of Path as a String.
+   function Read_File (Path : String) return String is
+      F   : Ada.Text_IO.File_Type;
+      Buf : Unbounded_String;
+   begin
+      Ada.Text_IO.Open (F, Ada.Text_IO.In_File, Path);
+      while not Ada.Text_IO.End_Of_File (F) loop
+         Append (Buf, Ada.Text_IO.Get_Line (F) & ASCII.LF);
+      end loop;
+      Ada.Text_IO.Close (F);
+      return To_String (Buf);
+   exception
+      when others =>
+         if Ada.Text_IO.Is_Open (F) then
+            Ada.Text_IO.Close (F);
+         end if;
+         return "";
+   end Read_File;
+
+   --  Fork after turn 1 of a two-turn session; verify the result file
+   --  contains turn 1 messages but not turn 2, and carries a fork name.
+   procedure Test_Fork_Session_One_Turn (T : in out Test) is
+      pragma Unreferenced (T);
+      Src_UUID : constant String := "test-fork-src-one-turn";
+   begin
+      Write_Fork_Source (Src_UUID, Two_Turn_JSONL (Src_UUID));
+      declare
+         New_UUID : constant String :=
+           Fork_Session (Src_UUID, 1, Fork_Target_Cwd);
+      begin
+         Assert (New_UUID'Length > 0,
+                 "Fork_Session should return a non-empty UUID");
+         declare
+            Content : constant String :=
+              Read_File (Sessions_Dir (Fork_Target_Cwd)
+                         & "/" & New_UUID & ".jsonl");
+         begin
+            Assert (Ada.Strings.Fixed.Index (Content, "Hello") > 0,
+                    "Fork @1 should contain turn-1 user message");
+            Assert (Ada.Strings.Fixed.Index (Content, "World") > 0,
+                    "Fork @1 should contain turn-1 assistant message");
+            Assert (Ada.Strings.Fixed.Index (Content, "Foo") = 0,
+                    "Fork @1 must not contain turn-2 user message");
+            Assert (Ada.Strings.Fixed.Index (Content, "Bar") = 0,
+                    "Fork @1 must not contain turn-2 assistant message");
+            Assert (Ada.Strings.Fixed.Index (Content, "Fork of") > 0,
+                    "Fork result should carry a fork session name");
+            Assert (Ada.Strings.Fixed.Index (Content, "@1") > 0,
+                    "Fork name should include the turn number");
+         end;
+         Delete_Fork_Result (New_UUID);
+      end;
+      Delete_Fork_Source (Src_UUID);
+   exception
+      when others =>
+         Delete_Fork_Source (Src_UUID);
+         raise;
+   end Test_Fork_Session_One_Turn;
+
+   --  Fork after turn 2 (the last turn); both turns must be present.
+   procedure Test_Fork_Session_Second_Turn (T : in out Test) is
+      pragma Unreferenced (T);
+      Src_UUID : constant String := "test-fork-src-two-turn";
+   begin
+      Write_Fork_Source (Src_UUID, Two_Turn_JSONL (Src_UUID));
+      declare
+         New_UUID : constant String :=
+           Fork_Session (Src_UUID, 2, Fork_Target_Cwd);
+      begin
+         Assert (New_UUID'Length > 0,
+                 "Fork @2 should succeed for a two-turn session");
+         declare
+            Content : constant String :=
+              Read_File (Sessions_Dir (Fork_Target_Cwd)
+                         & "/" & New_UUID & ".jsonl");
+         begin
+            Assert (Ada.Strings.Fixed.Index (Content, "Hello") > 0,
+                    "Fork @2 should contain turn-1 user message");
+            Assert (Ada.Strings.Fixed.Index (Content, "Foo") > 0,
+                    "Fork @2 should contain turn-2 user message");
+            Assert (Ada.Strings.Fixed.Index (Content, "Bar") > 0,
+                    "Fork @2 should contain turn-2 assistant message");
+         end;
+         Delete_Fork_Result (New_UUID);
+      end;
+      Delete_Fork_Source (Src_UUID);
+   exception
+      when others =>
+         Delete_Fork_Source (Src_UUID);
+         raise;
+   end Test_Fork_Session_Second_Turn;
+
+   --  Requesting a turn that does not exist returns "".
+   procedure Test_Fork_Session_Beyond_End (T : in out Test) is
+      pragma Unreferenced (T);
+      Src_UUID : constant String := "test-fork-src-beyond";
+   begin
+      Write_Fork_Source (Src_UUID, Two_Turn_JSONL (Src_UUID));
+      Assert (Fork_Session (Src_UUID, 99, Fork_Target_Cwd) = "",
+              "Fork beyond last turn should return empty string");
+      Delete_Fork_Source (Src_UUID);
+   exception
+      when others =>
+         Delete_Fork_Source (Src_UUID);
+         raise;
+   end Test_Fork_Session_Beyond_End;
+
+   --  Non-existent source UUID returns "".
+   procedure Test_Fork_Session_Missing_Src (T : in out Test) is
+      pragma Unreferenced (T);
+   begin
+      Assert
+        (Fork_Session ("no-such-uuid-xyzzy-999999", 1, Fork_Target_Cwd) = "",
+         "Fork with non-existent source should return empty string");
+   end Test_Fork_Session_Missing_Src;
 
 end Session_Lister_Tests;
