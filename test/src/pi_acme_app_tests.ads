@@ -65,6 +65,12 @@ package Pi_Acme_App_Tests is
    procedure Test_Edit_Diff_Utf8_Added_Line    (T : in out Test);
    procedure Test_Edit_Diff_No_Double_Encoding (T : in out Test);
 
+   --  Model in stats summary line
+   --  Verify the App_State accessor that gates the model part in the
+   --  get_session_stats summary appended at the end of each agentic turn.
+   procedure Test_Stats_Model_Part_When_Set   (T : in out Test);
+   procedure Test_Stats_Model_Part_When_Empty (T : in out Test);
+
    --  JSON_Scalar_Image
    procedure Test_JSON_Scalar_String           (T : in out Test);
    procedure Test_JSON_Scalar_Integer          (T : in out Test);

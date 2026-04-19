@@ -218,6 +218,15 @@ package body Test_Suites is
       Result.Add_Test (Acme_Int_Caller.Create
         ("[integration] Raw event parser with live window",
          Acme_Integration_Tests.Test_Raw_Event_From_Live'Access));
+      Result.Add_Test (Acme_Int_Caller.Create
+        ("[integration] Replace_Match substitutes matched text",
+         Acme_Integration_Tests.Test_Replace_Match_Simple'Access));
+      Result.Add_Test (Acme_Int_Caller.Create
+        ("[integration] Replace_Match is silent when pattern absent",
+         Acme_Integration_Tests.Test_Replace_Match_No_Match'Access));
+      Result.Add_Test (Acme_Int_Caller.Create
+        ("[integration] Replace_Match closes parallel blocks independently",
+         Acme_Integration_Tests.Test_Replace_Match_Parallel_Blocks'Access));
 
       --  Pi_RPC tests
       Result.Add_Test (Pi_RPC_Caller.Create
@@ -417,6 +426,12 @@ package body Test_Suites is
       Result.Add_Test (App_State_Caller.Create
         ("Edit_Diff_Lines: no double-encoding under -gnatW8 (regression)",
          Pi_Acme_App_Tests.Test_Edit_Diff_No_Double_Encoding'Access));
+      Result.Add_Test (App_State_Caller.Create
+        ("Stats model part: non-empty when model is set",
+         Pi_Acme_App_Tests.Test_Stats_Model_Part_When_Set'Access));
+      Result.Add_Test (App_State_Caller.Create
+        ("Stats model part: empty guard when no model set",
+         Pi_Acme_App_Tests.Test_Stats_Model_Part_When_Empty'Access));
       Result.Add_Test (App_State_Caller.Create
         ("JSON_Scalar_Image: string value returned without quotes",
          Pi_Acme_App_Tests.Test_JSON_Scalar_String'Access));

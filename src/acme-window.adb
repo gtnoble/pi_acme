@@ -163,6 +163,26 @@ package body Acme.Window is
       Atomic_Write (W, FS, "$", Text);
    end Append;
 
+   procedure Replace_Match
+     (W           : in out Win;
+      FS          : not null access Nine_P.Client.Fs;
+      Pattern     : String;
+      Replacement : String)
+   is
+   begin
+      W.Mutex.Acquire;
+      begin
+         Write_Win_File (FS, W.Win_Id, "addr", Pattern);
+         Write_Win_File (FS, W.Win_Id, "data", Replacement);
+      exception
+         when others =>
+            --  Pattern did not match or addr write failed; ignore silently.
+            W.Mutex.Release;
+            return;
+      end;
+      W.Mutex.Release;
+   end Replace_Match;
+
    procedure Replace_Line1
      (W    : in out Win;
       FS   : not null access Nine_P.Client.Fs;

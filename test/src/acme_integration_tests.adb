@@ -198,4 +198,161 @@ package body Acme_Integration_Tests is
       end;
    end Test_Raw_Event_From_Live;
 
+   --  ── Replace_Match: pattern found ─────────────────────────────────────
+   --
+   --  Write a body containing a unique placeholder token, replace it in-
+   --  place, and verify that the substitution is visible and the
+   --  surrounding text is preserved.
+
+   procedure Test_Replace_Match_Simple (T : in out Test) is
+      pragma Unreferenced (T);
+      Before  : constant String := "line one" & ASCII.LF;
+      Pending : constant String := "PENDING:abc123ef";
+      After   : constant String := ASCII.LF & "line three" & ASCII.LF;
+   begin
+      if not Acme_Running then return; end if;
+      declare
+         FS  : aliased Nine_P.Client.Fs := Ns_Mount ("acme");
+         Win : Acme.Window.Win          :=
+           Acme.Window.New_Win (FS'Access);
+         Id  : constant String :=
+           Natural_Image (Acme.Window.Id (Win));
+      begin
+         Acme.Window.Append (Win, FS'Access,
+                             Before & Pending & After);
+         Acme.Window.Replace_Match (Win, FS'Access,
+                                    "/" & Pending & "/",
+                                    "DONE");
+         declare
+            Body_Text : constant String :=
+              Read_Via_9p ("acme/" & Id & "/body");
+         begin
+            Assert
+              (Ada.Strings.Fixed.Index (Body_Text, "DONE") > 0,
+               "Replacement text should appear in body");
+            Assert
+              (Ada.Strings.Fixed.Index (Body_Text, Pending) = 0,
+               "Placeholder should be gone after replacement");
+            Assert
+              (Ada.Strings.Fixed.Index (Body_Text, "line one") > 0,
+               "Text before placeholder should be preserved");
+            Assert
+              (Ada.Strings.Fixed.Index (Body_Text, "line three") > 0,
+               "Text after placeholder should be preserved");
+         end;
+         Acme.Window.Delete (Win, FS'Access);
+      end;
+   end Test_Replace_Match_Simple;
+
+   --  ── Replace_Match: pattern absent ────────────────────────────────────
+   --
+   --  Calling Replace_Match when the pattern does not exist should be
+   --  silent: no exception, and the body must be unchanged.
+
+   procedure Test_Replace_Match_No_Match (T : in out Test) is
+      pragma Unreferenced (T);
+      Content : constant String := "unchanged content" & ASCII.LF;
+   begin
+      if not Acme_Running then return; end if;
+      declare
+         FS  : aliased Nine_P.Client.Fs := Ns_Mount ("acme");
+         Win : Acme.Window.Win          :=
+           Acme.Window.New_Win (FS'Access);
+         Id  : constant String :=
+           Natural_Image (Acme.Window.Id (Win));
+      begin
+         Acme.Window.Append (Win, FS'Access, Content);
+         --  Pattern that is not present — must not raise.
+         Acme.Window.Replace_Match (Win, FS'Access,
+                                    "/NOMATCH_XYZ_99/",
+                                    "REPLACED");
+         declare
+            Body_Text : constant String :=
+              Read_Via_9p ("acme/" & Id & "/body");
+         begin
+            Assert
+              (Ada.Strings.Fixed.Index (Body_Text, Content) > 0,
+               "Original content must be intact after a no-match replace");
+            Assert
+              (Ada.Strings.Fixed.Index (Body_Text, "REPLACED") = 0,
+               "Replacement text must not appear when pattern is absent");
+         end;
+         Acme.Window.Delete (Win, FS'Access);
+      end;
+   end Test_Replace_Match_No_Match;
+
+   --  ── Replace_Match: parallel tool blocks ──────────────────────────────
+   --
+   --  Simulate two tool blocks whose start events arrive before either
+   --  end event — the interleaved-parallel case.  Each placeholder is
+   --  uniquely identified by a token embedded in the pending-close line,
+   --  so closing them out-of-order still leaves the blocks sequential and
+   --  correctly attributed.
+
+   procedure Test_Replace_Match_Parallel_Blocks (T : in out Test) is
+      pragma Unreferenced (T);
+      Tok1     : constant String := "PENDING:tok1a2b3c";
+      Tok2     : constant String := "PENDING:tok2d4e5f";
+      Block1   : constant String :=
+        ASCII.LF & "[tool1]" & ASCII.LF & Tok1 & ASCII.LF;
+      Block2   : constant String :=
+        ASCII.LF & "[tool2]" & ASCII.LF & Tok2 & ASCII.LF;
+   begin
+      if not Acme_Running then return; end if;
+      declare
+         FS  : aliased Nine_P.Client.Fs := Ns_Mount ("acme");
+         Win : Acme.Window.Win          :=
+           Acme.Window.New_Win (FS'Access);
+         Id  : constant String :=
+           Natural_Image (Acme.Window.Id (Win));
+      begin
+         --  Both tool blocks open before either closes.
+         Acme.Window.Append (Win, FS'Access, Block1);
+         Acme.Window.Append (Win, FS'Access, Block2);
+
+         --  tool2 finishes first.
+         Acme.Window.Replace_Match (Win, FS'Access,
+                                    "/" & Tok2 & "/", "DONE2");
+         --  tool1 finishes second.
+         Acme.Window.Replace_Match (Win, FS'Access,
+                                    "/" & Tok1 & "/", "DONE1");
+
+         declare
+            Body_Text : constant String :=
+              Read_Via_9p ("acme/" & Id & "/body");
+            Pos_Tool1 : constant Natural :=
+              Ada.Strings.Fixed.Index (Body_Text, "[tool1]");
+            Pos_Done1 : constant Natural :=
+              Ada.Strings.Fixed.Index (Body_Text, "DONE1");
+            Pos_Tool2 : constant Natural :=
+              Ada.Strings.Fixed.Index (Body_Text, "[tool2]");
+            Pos_Done2 : constant Natural :=
+              Ada.Strings.Fixed.Index (Body_Text, "DONE2");
+         begin
+            Assert (Pos_Tool1 > 0, "[tool1] header present");
+            Assert (Pos_Done1 > 0, "DONE1 close present");
+            Assert (Pos_Tool2 > 0, "[tool2] header present");
+            Assert (Pos_Done2 > 0, "DONE2 close present");
+
+            --  Placeholders must be gone.
+            Assert
+              (Ada.Strings.Fixed.Index (Body_Text, Tok1) = 0,
+               "Placeholder tok1 must be replaced");
+            Assert
+              (Ada.Strings.Fixed.Index (Body_Text, Tok2) = 0,
+               "Placeholder tok2 must be replaced");
+
+            --  Block order in body: tool1 before tool2
+            --  (appended in that order; replacements do not reorder).
+            Assert (Pos_Tool1 < Pos_Tool2,
+                    "[tool1] must appear before [tool2]");
+            Assert (Pos_Done1 < Pos_Tool2,
+                    "DONE1 must appear before [tool2] header");
+            Assert (Pos_Done2 > Pos_Tool2,
+                    "DONE2 must appear after [tool2] header");
+         end;
+         Acme.Window.Delete (Win, FS'Access);
+      end;
+   end Test_Replace_Match_Parallel_Blocks;
+
 end Acme_Integration_Tests;

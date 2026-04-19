@@ -326,17 +326,26 @@ package body Pi_Interface_Tests is
    end Test_Simple_Prompt;
 
    --  ── Test_Abort ────────────────────────────────────────────────────────
+   --
+   --  Verifies that sending abort while an agent cycle is in progress
+   --  causes pi to emit agent_end.
+   --
+   --  The abort is intentionally deferred until agent_start has been
+   --  observed.  Sending abort before agent_start is a race: pi may
+   --  cancel the queued prompt without ever opening an agent cycle, so
+   --  agent_end would never arrive.
 
    procedure Test_Abort (T : in out Test) is
       pragma Unreferenced (T);
 
       Proc : Process := Start
-        (No_Session    => True,
-         Model         => Model,
-         Cwd   => Ada.Directories.Current_Directory);
+        (No_Session => True,
+         Model      => Model,
+         Cwd        => Ada.Directories.Current_Directory);
 
-      Got_Agent_End : Boolean := False;
-      Flag          : Done_Flag;
+      Got_Agent_Start : Boolean := False;
+      Got_Agent_End   : Boolean := False;
+      Flag            : Done_Flag;
 
       task Reader;
       task body Reader is
@@ -345,23 +354,43 @@ package body Pi_Interface_Tests is
          Send (Proc,
                "{""type"":""prompt"","
                & """message"":""Count from 1 to 1000 very slowly.""}");
-         Send (Proc, "{""type"":""abort""}");
-         loop
+
+         --  Phase 1 — wait for agent_start, then send abort.
+         Phase_1 : loop
             declare
                Line : constant String := Read_Line (Proc);
                R    : Read_Result;
             begin
-               exit when Line = "";
+               exit Phase_1 when Line = "";
                R := Read (Line);
-               if R.Success then
-                  if Str (R.Value, "type") = "agent_end" then
-                     Got_Agent_End := True;
-                     Flag.Signal;
-                     exit;
-                  end if;
+               if R.Success
+                 and then Str (R.Value, "type") = "agent_start"
+               then
+                  Got_Agent_Start := True;
+                  Send (Proc, "{""type"":""abort""}");
+                  exit Phase_1;
                end if;
             end;
-         end loop;
+         end loop Phase_1;
+
+         --  Phase 2 — wait for agent_end produced by the abort.
+         Phase_2 : loop
+            declare
+               Line : constant String := Read_Line (Proc);
+               R    : Read_Result;
+            begin
+               exit Phase_2 when Line = "";
+               R := Read (Line);
+               if R.Success
+                 and then Str (R.Value, "type") = "agent_end"
+               then
+                  Got_Agent_End := True;
+                  Flag.Signal;
+                  exit Phase_2;
+               end if;
+            end;
+         end loop Phase_2;
+
          Flag.Signal;
       exception
          when others => Flag.Signal;
@@ -371,12 +400,14 @@ package body Pi_Interface_Tests is
       select
          Flag.Wait;
       or
-         delay 15.0;
+         delay 20.0;
       end select;
       Terminate_Process (Proc);
 
+      Assert (Got_Agent_Start,
+              "agent_start should arrive before abort is sent");
       Assert (Got_Agent_End,
-              "agent_end should arrive within 15 s after abort");
+              "agent_end should arrive within 20 s after abort");
    end Test_Abort;
 
    procedure Test_Message_End_Tokens (T : in out Test) is

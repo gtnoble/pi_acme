@@ -70,6 +70,8 @@ package body Pi_Acme_App is
      Character'Val (16#E2#) & Character'Val (16#94#) & Character'Val (16#80#);
    UC_RETRY  : constant String :=  --  ↻  U+21BB
      Character'Val (16#E2#) & Character'Val (16#86#) & Character'Val (16#BB#);
+   UC_HOOK_L : constant String :=  --  ↩  U+21A9
+     Character'Val (16#E2#) & Character'Val (16#86#) & Character'Val (16#A9#);
 
    --  ── App_State body ────────────────────────────────────────────────────
 
@@ -1015,31 +1017,80 @@ package body Pi_Acme_App is
                   Args.Map_JSON_Object (Show_Field'Access);
                end;
             end if;
+            --  Append a pending-close placeholder that embeds the token.
+            --  tool_execution_end will find and replace it in-place via
+            --  acme's regexp addr mechanism.  When no token is available
+            --  the placeholder is omitted and the end handler falls back
+            --  to appending the close marker normally.
+            if Tok'Length > 0 then
+               Acme.Window.Append
+                 (Win, FS,
+                  ASCII.LF & UC_BOX_BL & " " & UC_ELLIP & Tok
+                  & ASCII.LF & ASCII.LF);
+            end if;
             Section := Tool_Section;
          end;
 
       --  ── tool_execution_end ────────────────────────────────────────────
       elsif Kind = "tool_execution_end" then
-         if Get_Boolean (Event, "isError") then
-            declare
-               Result  : constant String  := Get_String (Event, "result");
-               Preview : constant Natural :=
-                 (if Result'Length > 80
-                  then Result'First + 79
-                  else Result'Last);
-            begin
-               Acme.Window.Append
-                 (Win, FS,
-                  ASCII.LF & UC_BOX_BL & " " & UC_CROSS & " "
-                  & Result (Result'First .. Preview) & ASCII.LF & ASCII.LF);
-            end;
-         else
-            Acme.Window.Append
-              (Win, FS,
-               "" & ASCII.LF
-               & UC_BOX_BL & " " & UC_CHECK & ASCII.LF & ASCII.LF);
-         end if;
-         Section := No_Section;
+         declare
+            Tool_Id : constant String :=
+              Get_String (Event, "toolCallId");
+            Tok     : constant String :=
+              (if Tool_Id'Length > 0
+               then Hash_Tool_Id (Tool_Id)
+               else "");
+         begin
+            if Tok'Length > 0 then
+               --  Replace the pending-close placeholder written by
+               --  tool_execution_start in-place via acme regexp addr.
+               if Get_Boolean (Event, "isError") then
+                  declare
+                     Result  : constant String  :=
+                       Get_String (Event, "result");
+                     Preview : constant Natural :=
+                       (if Result'Length > 80
+                        then Result'First + 79
+                        else Result'Last);
+                  begin
+                     Acme.Window.Replace_Match
+                       (Win, FS,
+                        "/" & UC_BOX_BL & " " & UC_ELLIP & Tok & "/",
+                        UC_BOX_BL & " " & UC_CROSS & " "
+                        & Result (Result'First .. Preview));
+                  end;
+               else
+                  Acme.Window.Replace_Match
+                    (Win, FS,
+                     "/" & UC_BOX_BL & " " & UC_ELLIP & Tok & "/",
+                     UC_BOX_BL & " " & UC_CHECK);
+               end if;
+            else
+               --  No token: fall back to appending the close marker.
+               if Get_Boolean (Event, "isError") then
+                  declare
+                     Result  : constant String  :=
+                       Get_String (Event, "result");
+                     Preview : constant Natural :=
+                       (if Result'Length > 80
+                        then Result'First + 79
+                        else Result'Last);
+                  begin
+                     Acme.Window.Append
+                       (Win, FS,
+                        ASCII.LF & UC_BOX_BL & " " & UC_CROSS & " "
+                        & Result (Result'First .. Preview)
+                        & ASCII.LF & ASCII.LF);
+                  end;
+               else
+                  Acme.Window.Append
+                    (Win, FS,
+                     "" & ASCII.LF
+                     & UC_BOX_BL & " " & UC_CHECK & ASCII.LF & ASCII.LF);
+               end if;
+            end if;
+            Section := No_Section;
+         end;
 
       --  ── message_end (token counts) ────────────────────────────────────
       elsif Kind = "message_end" then
@@ -1338,6 +1389,17 @@ package body Pi_Acme_App is
                               "^" & Format_Kilo (Output_Tokens)
                               & " out");
                         end if;
+                        declare
+                           Model_Text : constant String :=
+                             State.Current_Model;
+                        begin
+                           if Model_Text'Length > 0 then
+                              if Length (Parts) > 0 then
+                                 Append (Parts, " | ");
+                              end if;
+                              Append (Parts, Model_Text);
+                           end if;
+                        end;
                         if Length (Parts) > 0 then
                            Acme.Window.Append
                              (Win, FS,
@@ -2739,6 +2801,33 @@ package body Pi_Acme_App is
                            elsif Text = "Stop" then
                               Pi_RPC.Send
                                 (Proc, "{""type"":""abort""}");
+                           elsif Text = "Steer" then
+                              declare
+                                 Sel : constant String :=
+                                   Acme.Window.Selection_Text
+                                     (Win, My_FS'Access);
+                              begin
+                                 if Sel'Length > 0 then
+                                    Acme.Window.Append
+                                      (Win, My_FS'Access,
+                                       ASCII.LF & UC_HOOK_L
+                                       & " Steer: " & Sel & ASCII.LF);
+                                    declare
+                                       Msg : constant JSON_Value :=
+                                         Create_Object;
+                                    begin
+                                       Msg.Set_Field
+                                         ("type", Create ("prompt"));
+                                       Msg.Set_Field
+                                         ("message", Create (Sel));
+                                       Msg.Set_Field
+                                         ("streamingBehavior",
+                                          Create ("steer"));
+                                       Pi_RPC.Send
+                                         (Proc, Write (Msg));
+                                    end;
+                                 end if;
+                              end;
                            elsif Text = "New" then
                               Pi_RPC.Send
                                 (Proc, "{""type"":""new_session""}");

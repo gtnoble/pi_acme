@@ -11,4 +11,9 @@ package Acme_Integration_Tests is
    procedure Test_Selection_Empty      (T : in out Test);
    procedure Test_Raw_Event_From_Live  (T : in out Test);
 
+   --  Replace_Match tests
+   procedure Test_Replace_Match_Simple           (T : in out Test);
+   procedure Test_Replace_Match_No_Match         (T : in out Test);
+   procedure Test_Replace_Match_Parallel_Blocks  (T : in out Test);
+
 end Acme_Integration_Tests;

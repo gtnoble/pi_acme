@@ -815,6 +815,53 @@ package body Pi_Acme_App_Tests is
          & "(regression: Ada.Text_IO.Put re-encoding under -gnatW8)");
    end Test_Edit_Diff_No_Double_Encoding;
 
+   --  ── Model in stats summary ────────────────────────────────────────────
+   --
+   --  These tests document the App_State accessor that gates the model part
+   --  appended to the per-turn stats line in Dispatch_Pi_Event's
+   --  get_session_stats handler.  The handler uses:
+   --
+   --    Model_Text : constant String := State.Current_Model;
+   --    if Model_Text'Length > 0 then
+   --       Append (Parts, " | ");
+   --       Append (Parts, Model_Text);
+   --    end if;
+   --
+   --  When a model is active the non-empty string is contributed; when no
+   --  model has been set yet the condition is False and the stats line is
+   --  not padded with a spurious separator.
+
+   --  With a model set, Current_Model returns a non-empty string that
+   --  satisfies the guard and would be appended to the stats parts.
+   procedure Test_Stats_Model_Part_When_Set (T : in out Test) is
+      pragma Unreferenced (T);
+      S          : App_State;
+      Model_Text : Ada.Strings.Unbounded.Unbounded_String;
+   begin
+      S.Set_Model ("anthropic/claude-opus-4-5");
+      Model_Text :=
+        Ada.Strings.Unbounded.To_Unbounded_String (S.Current_Model);
+      Assert
+        (Ada.Strings.Unbounded.Length (Model_Text) > 0,
+         "Current_Model should be non-empty when a model is set");
+      Assert
+        (Ada.Strings.Unbounded.To_String (Model_Text)
+           = "anthropic/claude-opus-4-5",
+         "Current_Model should return the exact model string");
+   end Test_Stats_Model_Part_When_Set;
+
+   --  With no model set, Current_Model returns an empty string and the
+   --  guard is False, so no model part is appended to the stats line.
+   procedure Test_Stats_Model_Part_When_Empty (T : in out Test) is
+      pragma Unreferenced (T);
+      S : App_State;
+   begin
+      Assert
+        (S.Current_Model'Length = 0,
+         "Current_Model should be empty on a fresh App_State; "
+         & "guard must be False so no model part is emitted");
+   end Test_Stats_Model_Part_When_Empty;
+
    --  A JSON string value is returned as-is, without surrounding quotes.
    procedure Test_JSON_Scalar_String (T : in out Test) is
       pragma Unreferenced (T);
