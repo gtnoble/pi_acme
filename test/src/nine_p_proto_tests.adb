@@ -258,6 +258,36 @@ package body Nine_P_Proto_Tests is
       Assert (To_String (Got.Wr_Data) = "write me",   "Data mismatch");
    end Test_Twrite_Round_Trip;
 
+   --  A Twrite with empty data (count=0) must pack and unpack correctly.
+   --  This is the wire-format counterpart of the Nine_P.Client.Write
+   --  zero-length fix: the client sends one Twrite RPC with Wr_Data = ""
+   --  so that acme's data VFS file replaces the addressed selection with
+   --  nothing.
+   procedure Test_Twrite_Empty_Data (T : in out Test) is
+      pragma Unreferenced (T);
+      Orig : constant Message :=
+        (Kind      => Kind_Twrite,
+         Tag       => 9,
+         Wr_Fid    => 7,
+         Wr_Offset => 0,
+         Wr_Data   => Null_Unbounded_String);
+      Got        : constant Message := RT (Orig);
+      Packed     : constant Byte_Array := Pack (Orig);
+      --  Twrite wire layout: size(4) + type(1) + tag(2) + fid(4) +
+      --    offset(8) + count(4) = 23 bytes; no data bytes.
+      Twrite_Min : constant := 23;
+   begin
+      Assert (Got.Kind = Kind_Twrite,
+              "Empty-data Twrite round-trip: Kind mismatch");
+      Assert (Got.Wr_Fid = 7,
+              "Empty-data Twrite round-trip: Fid mismatch");
+      Assert (To_String (Got.Wr_Data) = "",
+              "Empty-data Twrite round-trip: Data must be empty");
+      Assert (Packed'Length = Twrite_Min,
+              "Empty-data Twrite must be exactly"
+              & Twrite_Min'Image & " bytes");
+   end Test_Twrite_Empty_Data;
+
    procedure Test_Rwrite_Round_Trip (T : in out Test) is
       pragma Unreferenced (T);
       Orig : constant Message :=

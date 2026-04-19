@@ -516,6 +516,26 @@ package body Nine_P.Client is
          else Natural (F.Filesystem.MSize) - 24);
       Total  : Natural := 0;
    begin
+      --  A zero-length write must still send one Twrite RPC so that
+      --  servers (e.g. acme's data VFS file) receive the request to
+      --  replace the currently addressed selection with nothing.  The
+      --  chunk loop below never executes when Data is empty, so handle
+      --  this case explicitly before entering the loop.
+      if Data'Length = 0 then
+         declare
+            Tag      : constant Uint16  := Alloc_Tag (F.Filesystem);
+            Response : constant Message :=
+              RPC (F.Filesystem,
+                   (Kind      => Kind_Twrite,
+                    Tag       => Tag,
+                    Wr_Fid    => F.Fid,
+                    Wr_Offset => F.Offset,
+                    Wr_Data   => Null_Unbounded_String));
+            pragma Unreferenced (Response);
+         begin
+            return 0;
+         end;
+      end if;
       while Total < Data'Length loop
          declare
             Chunk_Length : constant Natural :=

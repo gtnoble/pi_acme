@@ -90,6 +90,9 @@ package body Test_Suites is
         ("Pack/Unpack Twrite",
          Nine_P_Proto_Tests.Test_Twrite_Round_Trip'Access));
       Result.Add_Test (Proto_Caller.Create
+        ("Pack/Unpack Twrite with empty data (count=0)",
+         Nine_P_Proto_Tests.Test_Twrite_Empty_Data'Access));
+      Result.Add_Test (Proto_Caller.Create
         ("Pack/Unpack Rwrite",
          Nine_P_Proto_Tests.Test_Rwrite_Round_Trip'Access));
       Result.Add_Test (Proto_Caller.Create
@@ -227,6 +230,15 @@ package body Test_Suites is
       Result.Add_Test (Acme_Int_Caller.Create
         ("[integration] Replace_Match closes parallel blocks independently",
          Acme_Integration_Tests.Test_Replace_Match_Parallel_Blocks'Access));
+      Result.Add_Test (Acme_Int_Caller.Create
+        ("[integration] Clear: Replace_Match ""1,$"" erases body content",
+         Acme_Integration_Tests.Test_Clear_Body_Erases_Content'Access));
+      Result.Add_Test (Acme_Int_Caller.Create
+        ("[integration] Clear: full sequence leaves only the status line",
+         Acme_Integration_Tests.Test_Clear_Body_Restores_Status'Access));
+      Result.Add_Test (Acme_Int_Caller.Create
+        ("[integration] Clear: safe on an already-empty body",
+         Acme_Integration_Tests.Test_Clear_Body_On_Empty_Body'Access));
 
       --  Pi_RPC tests
       Result.Add_Test (Pi_RPC_Caller.Create

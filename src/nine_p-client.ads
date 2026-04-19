@@ -73,6 +73,9 @@ package Nine_P.Client is
    function Read_Once (F : not null access File'Class) return Byte_Array;
 
    --  Write bytes; return number of bytes written.
+   --  A zero-length Data still sends one Twrite message so that servers
+   --  such as acme's data VFS file can act on the current addr selection
+   --  (replacing it with nothing effectively deletes the addressed text).
    function Write (F    : not null access File'Class;
                    Data : Byte_Array) return Natural;
 

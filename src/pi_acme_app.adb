@@ -780,7 +780,9 @@ package body Pi_Acme_App is
               or else (L'Length >= 3
                  and then L (L'First .. L'First + 2) = "+++")
               or else (L'Length >= 2
-                 and then L (L'First .. L'First + 1) = "@@");
+                 and then L (L'First .. L'First + 1) = "@@")
+              or else (L'Length >= 1
+                 and then L (L'First) = '\');
          begin
             if Skip then
                return;
@@ -2855,10 +2857,12 @@ package body Pi_Acme_App is
                                    (Proc, "{""type"":""compact""}");
                               end if;
                            elsif Text = "Clear" then
-                              Acme.Window.Ctl
-                                (Win, My_FS'Access, "addr 1,$");
-                              Acme.Window.Ctl
-                                (Win, My_FS'Access, "data");
+                              Acme.Window.Replace_Match
+                                (Win, My_FS'Access, "1,$", "");
+                              Acme.Window.Append
+                                (Win, My_FS'Access,
+                                 Format_Status (State, "ready")
+                                 & ASCII.LF);
                            elsif Text = "Models" then
                               declare
                                  Parent  : constant String :=

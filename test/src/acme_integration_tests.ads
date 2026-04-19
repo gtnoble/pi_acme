@@ -16,4 +16,16 @@ package Acme_Integration_Tests is
    procedure Test_Replace_Match_No_Match         (T : in out Test);
    procedure Test_Replace_Match_Parallel_Blocks  (T : in out Test);
 
+   --  Clear tag-command behaviour
+   --
+   --  These tests verify the two-step sequence used by the Clear tag
+   --  command: Replace_Match ("1,$", "") erases the body, then Append
+   --  writes the new status line.  They guard against regression to the
+   --  previous broken implementation that called Ctl ("addr 1,$") and
+   --  Ctl ("data"), which wrote to the ctl file and had no effect on the
+   --  body.
+   procedure Test_Clear_Body_Erases_Content  (T : in out Test);
+   procedure Test_Clear_Body_Restores_Status (T : in out Test);
+   procedure Test_Clear_Body_On_Empty_Body   (T : in out Test);
+
 end Acme_Integration_Tests;

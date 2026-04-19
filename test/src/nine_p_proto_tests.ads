@@ -22,6 +22,7 @@ package Nine_P_Proto_Tests is
    procedure Test_Tread_Round_Trip        (T : in out Test);
    procedure Test_Rread_Round_Trip        (T : in out Test);
    procedure Test_Twrite_Round_Trip       (T : in out Test);
+   procedure Test_Twrite_Empty_Data       (T : in out Test);
    procedure Test_Rwrite_Round_Trip       (T : in out Test);
    procedure Test_Tclunk_Round_Trip       (T : in out Test);
    procedure Test_Stat_Message_Round_Trip (T : in out Test);

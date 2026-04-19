@@ -355,4 +355,123 @@ package body Acme_Integration_Tests is
       end;
    end Test_Replace_Match_Parallel_Blocks;
 
+   --  ── Clear: erase content ─────────────────────────────────────────────
+   --
+   --  Replace_Match ("1,$", "") must remove all existing body text, leaving
+   --  the window empty.  This is the first step of the Clear tag command.
+
+   procedure Test_Clear_Body_Erases_Content (T : in out Test) is
+      pragma Unreferenced (T);
+      Content : constant String :=
+        "turn 1 response" & ASCII.LF
+        & "turn 2 response" & ASCII.LF;
+   begin
+      if not Acme_Running then return; end if;
+      declare
+         FS  : aliased Nine_P.Client.Fs := Ns_Mount ("acme");
+         Win : Acme.Window.Win          :=
+           Acme.Window.New_Win (FS'Access);
+         Id  : constant String :=
+           Natural_Image (Acme.Window.Id (Win));
+      begin
+         Acme.Window.Append (Win, FS'Access, Content);
+         --  Step 1 of the Clear command: erase the whole body.
+         Acme.Window.Replace_Match (Win, FS'Access, "1,$", "");
+         declare
+            Body_Text : constant String :=
+              Read_Via_9p ("acme/" & Id & "/body");
+         begin
+            Assert
+              (Ada.Strings.Fixed.Index (Body_Text, "turn 1 response") = 0,
+               "Body must not contain old content after Replace_Match "
+               & """1,$""");
+            Assert
+              (Ada.Strings.Fixed.Index (Body_Text, "turn 2 response") = 0,
+               "Body must not contain old content after Replace_Match "
+               & """1,$""");
+         end;
+         Acme.Window.Delete (Win, FS'Access);
+      end;
+   end Test_Clear_Body_Erases_Content;
+
+   --  ── Clear: full two-step sequence ────────────────────────────────────
+   --
+   --  The Clear tag command is: Replace_Match ("1,$", "") then
+   --  Append (status_line & LF).  After the sequence the old conversation
+   --  text must be gone and the new status line must be the only content.
+
+   procedure Test_Clear_Body_Restores_Status (T : in out Test) is
+      pragma Unreferenced (T);
+      --  Sentinel strings that must NOT survive Clear.
+      Old_Content : constant String :=
+        "old conversation content" & ASCII.LF;
+      --  Plain ASCII status marker; avoids raw multi-byte UTF-8 literals.
+      Status_Line : constant String :=
+        "CLEAR_STATUS_MARKER" & ASCII.LF;
+   begin
+      if not Acme_Running then return; end if;
+      declare
+         FS  : aliased Nine_P.Client.Fs := Ns_Mount ("acme");
+         Win : Acme.Window.Win          :=
+           Acme.Window.New_Win (FS'Access);
+         Id  : constant String :=
+           Natural_Image (Acme.Window.Id (Win));
+      begin
+         Acme.Window.Append (Win, FS'Access, Old_Content);
+         --  Replicate the Clear command: erase then write status line.
+         Acme.Window.Replace_Match (Win, FS'Access, "1,$", "");
+         Acme.Window.Append        (Win, FS'Access, Status_Line);
+         declare
+            Body_Text : constant String :=
+              Read_Via_9p ("acme/" & Id & "/body");
+         begin
+            Assert
+              (Ada.Strings.Fixed.Index (Body_Text,
+                                        "old conversation content") = 0,
+               "Old content must be absent after the Clear sequence");
+            Assert
+              (Ada.Strings.Fixed.Index (Body_Text,
+                                        "CLEAR_STATUS_MARKER") > 0,
+               "Status line must be present after the Clear sequence");
+         end;
+         Acme.Window.Delete (Win, FS'Access);
+      end;
+   end Test_Clear_Body_Restores_Status;
+
+   --  ── Clear on an already-empty body ───────────────────────────────────
+   --
+   --  Invoking the Clear sequence on a window whose body is already empty
+   --  must not raise an exception.  Replace_Match silently ignores address
+   --  errors; the subsequent Append must still place the status line in the
+   --  body.
+
+   procedure Test_Clear_Body_On_Empty_Body (T : in out Test) is
+      pragma Unreferenced (T);
+      --  Plain ASCII status marker; avoids raw multi-byte UTF-8 literals.
+      Status_Line : constant String := "CLEAR_STATUS_MARKER" & ASCII.LF;
+   begin
+      if not Acme_Running then return; end if;
+      declare
+         FS  : aliased Nine_P.Client.Fs := Ns_Mount ("acme");
+         Win : Acme.Window.Win          :=
+           Acme.Window.New_Win (FS'Access);
+         Id  : constant String :=
+           Natural_Image (Acme.Window.Id (Win));
+      begin
+         --  Body is empty — Clear must not raise.
+         Acme.Window.Replace_Match (Win, FS'Access, "1,$", "");
+         Acme.Window.Append        (Win, FS'Access, Status_Line);
+         declare
+            Body_Text : constant String :=
+              Read_Via_9p ("acme/" & Id & "/body");
+         begin
+            Assert
+              (Ada.Strings.Fixed.Index (Body_Text,
+                                        "CLEAR_STATUS_MARKER") > 0,
+               "Status line must be present even when body was empty");
+         end;
+         Acme.Window.Delete (Win, FS'Access);
+      end;
+   end Test_Clear_Body_On_Empty_Body;
+
 end Acme_Integration_Tests;
