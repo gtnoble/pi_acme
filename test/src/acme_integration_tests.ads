@@ -28,4 +28,7 @@ package Acme_Integration_Tests is
    procedure Test_Clear_Body_Restores_Status (T : in out Test);
    procedure Test_Clear_Body_On_Empty_Body   (T : in out Test);
 
+   --  Live end-of-turn footer helper used by get_session_stats responses.
+   procedure Test_Append_Live_Turn_Footer (T : in out Test);
+
 end Acme_Integration_Tests;

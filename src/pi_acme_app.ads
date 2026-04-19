@@ -126,7 +126,7 @@ package Pi_Acme_App is
    --  current working directory) so sessions from other projects are found.
    --  Restores State.Turn_Tokens from the last assistant usage block so
    --  that the status line and +stats window are accurate immediately after
-   --  a session reload.  Appends a separator line when rendering completes.
+   --  a session reload.  Appends a turn footer when rendering completes.
    --  Writes an error message to Win if the session file cannot be located
    --  or read.
    procedure Render_Session_History
@@ -134,6 +134,20 @@ package Pi_Acme_App is
       Win   : in out Acme.Window.Win;
       FS    : not null access Nine_P.Client.Fs;
       State : in out App_State);
+
+   --  Append the live end-of-turn footer to Win using the current values in
+   --  State, and increment State.Turn_Count.  The footer format is:
+   --
+   --    [ctx ... | ^... out | provider/model] fork+PID/UUID/N
+   --    ════════════════════════════════════════════════════════════
+   --
+   --  where the bracketed summary is omitted when no summary parts are
+   --  available.  Used by Dispatch_Pi_Event when get_session_stats returns.
+   procedure Append_Live_Turn_Footer
+     (Win   : in out Acme.Window.Win;
+      FS    : not null access Nine_P.Client.Fs;
+      State : in out App_State;
+      PID   : String);
 
    --  ── String utilities ─────────────────────────────────────────────────
 

@@ -239,6 +239,9 @@ package body Test_Suites is
       Result.Add_Test (Acme_Int_Caller.Create
         ("[integration] Clear: safe on an already-empty body",
          Acme_Integration_Tests.Test_Clear_Body_On_Empty_Body'Access));
+      Result.Add_Test (Acme_Int_Caller.Create
+        ("[integration] Live footer: summary and fork share one line",
+         Acme_Integration_Tests.Test_Append_Live_Turn_Footer'Access));
 
       --  Pi_RPC tests
       Result.Add_Test (Pi_RPC_Caller.Create

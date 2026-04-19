@@ -529,7 +529,6 @@ package body Session_History_Tests is
          State : App_State;
          Id    : constant String :=
            Natural_Image (Acme.Window.Id (Win));
-         pragma Unreferenced (Id);
       begin
          Render_Session_History (UUID, Win, FS'Access, State);
          --  input + cacheRead + cacheWrite = 1500 + 300 + 100 = 1900
@@ -541,6 +540,14 @@ package body Session_History_Tests is
            (State.Turn_Output_Tokens = 42,
             "Output tokens should be 42; got "
             & Natural'Image (State.Turn_Output_Tokens));
+         declare
+            Body_Text : constant String :=
+              Read_Via_9p ("acme/" & Id & "/body");
+         begin
+            Assert
+              (Contains (Body_Text, "] fork+"),
+               "Summary block and fork token should share one line");
+         end;
          Acme.Window.Ctl (Win, FS'Access, "clean");
          Acme.Window.Ctl (Win, FS'Access, "del");
          Delete_Session (UUID);
@@ -556,7 +563,7 @@ package body Session_History_Tests is
    procedure Test_Render_Separator (T : in out Test) is
       pragma Unreferenced (T);
       UUID : constant String := "test-piacme-render-sep";
-      --  UC_DBL_H  U+2550  (used in Format_Separator)
+      --  UC_DBL_H  U+2550  (used in turn footer separator rule)
       UC_Dbl_H : constant String :=
         Character'Val (16#E2#)
         & Character'Val (16#95#)

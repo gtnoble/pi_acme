@@ -10,6 +10,7 @@ with Acme;
 with Acme.Window;
 with Acme.Event_Parser;
 with Acme.Raw_Events;
+with Pi_Acme_App;
 
 package body Acme_Integration_Tests is
 
@@ -473,5 +474,67 @@ package body Acme_Integration_Tests is
          Acme.Window.Delete (Win, FS'Access);
       end;
    end Test_Clear_Body_On_Empty_Body;
+
+   --  ── Live get_session_stats footer formatting ────────────────────────
+   --
+   --  The live get_session_stats path calls Append_Live_Turn_Footer,
+   --  which must place the bracketed summary and fork token on one line,
+   --  then the double-line separator rule on the next line.
+
+   procedure Test_Append_Live_Turn_Footer (T : in out Test) is
+      pragma Unreferenced (T);
+      Session_Id : constant String :=
+        "ca8add79-7902-415c-af1d-b4b4e93bb12b";
+      PID        : constant String := "36546";
+      --  UC_DBL_H  U+2550
+      UC_Dbl_H : constant String :=
+        Character'Val (16#E2#)
+        & Character'Val (16#95#)
+        & Character'Val (16#90#);
+   begin
+      if not Acme_Running then return; end if;
+      declare
+         FS    : aliased Nine_P.Client.Fs := Ns_Mount ("acme");
+         Win   : Acme.Window.Win          :=
+           Acme.Window.New_Win (FS'Access);
+         State : Pi_Acme_App.App_State;
+         Id    : constant String :=
+           Natural_Image (Acme.Window.Id (Win));
+      begin
+         State.Set_Session_Id (Session_Id);
+         State.Set_Model ("github-copilot/gpt-5.3-codex");
+         State.Set_Context_Window (400_000);
+         State.Set_Turn_Tokens (24_000, 537);
+
+         Pi_Acme_App.Append_Live_Turn_Footer
+           (Win   => Win,
+            FS    => FS'Access,
+            State => State,
+            PID   => PID);
+
+         declare
+            Body_Text : constant String :=
+              Read_Via_9p ("acme/" & Id & "/body");
+            Footer    : constant String :=
+              "] fork+" & PID & "/" & Session_Id & "/1";
+         begin
+            Assert (State.Turn_Count = 1,
+                    "Append_Live_Turn_Footer must increment Turn_Count");
+            Assert
+              (Ada.Strings.Fixed.Index (Body_Text, Footer) > 0,
+               "Summary block and fork token must share one line");
+            Assert
+              (Ada.Strings.Fixed.Index
+                 (Body_Text, ASCII.LF & ASCII.LF & "fork+") = 0,
+               "fork token must not start a standalone line when summary "
+               & "exists");
+            Assert
+              (Ada.Strings.Fixed.Index (Body_Text, UC_Dbl_H) > 0,
+               "Double-line separator rule must be present");
+         end;
+
+         Acme.Window.Delete (Win, FS'Access);
+      end;
+   end Test_Append_Live_Turn_Footer;
 
 end Acme_Integration_Tests;

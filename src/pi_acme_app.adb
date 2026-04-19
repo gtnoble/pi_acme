@@ -644,21 +644,103 @@ package body Pi_Acme_App is
    type Section_Kind is
      (No_Section, Thinking_Section, Text_Section, Tool_Section);
 
-   --  Separator between turns.  Carries a clickable fork token so that
-   --  button-3 on the separator line opens a forked session.
-   --  Format:  fork+PID/UUID/N\n════...════\n\n
-   function Format_Separator
-     (Turn_N  : Positive;
-      UUID    : String;
-      PID     : String) return String
+   --  Build the bracketed per-turn summary placed before the fork token.
+   --  Returns "" when no summary parts are available.
+   function Format_Turn_Summary
+     (Input_Tokens  : Natural;
+      Output_Tokens : Natural;
+      Ctx_Window    : Natural;
+      Model_Text    : String) return String
    is
+      Parts : Unbounded_String;
+   begin
+      if Input_Tokens > 0 and then Ctx_Window > 0 then
+         Append
+           (Parts,
+            "ctx "
+            & Format_Kilo (Input_Tokens)
+            & "/" & Format_Kilo (Ctx_Window)
+            & " ("
+            & Natural_Image (Input_Tokens * 100 / Ctx_Window)
+            & "%)");
+      end if;
+      if Output_Tokens > 0 then
+         if Length (Parts) > 0 then
+            Append (Parts, " | ");
+         end if;
+         Append
+           (Parts,
+            "^" & Format_Kilo (Output_Tokens)
+            & " out");
+      end if;
+      if Model_Text'Length > 0 then
+         if Length (Parts) > 0 then
+            Append (Parts, " | ");
+         end if;
+         Append (Parts, Model_Text);
+      end if;
+      return
+        (if Length (Parts) > 0
+         then "[" & To_String (Parts) & "]"
+         else "");
+   end Format_Turn_Summary;
+
+   --  Turn footer between completed turns.  Carries a clickable fork token
+   --  so button-3 opens a forked session.
+   --  Format: [summary ]fork+PID/UUID/N\n════...════\n\n
+   function Format_Turn_Footer
+     (Turn_N        : Positive;
+      UUID          : String;
+      PID           : String;
+      Input_Tokens  : Natural := 0;
+      Output_Tokens : Natural := 0;
+      Ctx_Window    : Natural := 0;
+      Model_Text    : String  := "") return String
+   is
+      Summary : constant String :=
+        Format_Turn_Summary
+          (Input_Tokens  => Input_Tokens,
+           Output_Tokens => Output_Tokens,
+           Ctx_Window    => Ctx_Window,
+           Model_Text    => Model_Text);
    begin
       return ASCII.LF & ASCII.LF
+             & (if Summary'Length > 0 then Summary & " " else "")
              & "fork+" & PID & "/" & UUID & "/"
              & Natural_Image (Turn_N) & ASCII.LF
              & Str_Repeat (UC_DBL_H, 60)
              & ASCII.LF & ASCII.LF;
-   end Format_Separator;
+   end Format_Turn_Footer;
+
+   --  Append a live turn footer using the current state fields and advance
+   --  the turn counter.
+   procedure Append_Live_Turn_Footer
+     (Win   : in out Acme.Window.Win;
+      FS    : not null access Nine_P.Client.Fs;
+      State : in out App_State;
+      PID   : String)
+   is
+      Input_Tokens  : constant Natural :=
+        State.Turn_Input_Tokens;
+      Output_Tokens : constant Natural :=
+        State.Turn_Output_Tokens;
+      Ctx_Window    : constant Natural :=
+        State.Context_Window;
+      Model_Text    : constant String  :=
+        State.Current_Model;
+   begin
+      State.Increment_Turn_Count;
+      Acme.Window.Append
+        (Win, FS,
+         Format_Turn_Footer
+           (Turn_N        => State.Turn_Count,
+            UUID          => State.Session_Id,
+            PID           => PID,
+            Input_Tokens  => Input_Tokens,
+            Output_Tokens => Output_Tokens,
+            Ctx_Window    => Ctx_Window,
+            Model_Text    => Model_Text));
+   end Append_Live_Turn_Footer;
 
    --  ── Edit_Diff_Lines ───────────────────────────────────────────────────
    --
@@ -1359,63 +1441,13 @@ package body Pi_Acme_App is
                elsif Command = "get_session_stats" then
                   if State.Pending_Stats then
                      State.Set_Pending_Stats (False);
-                     --  Append turn summary line.
-                     declare
-                        Input_Tokens  : constant Natural :=
-                          State.Turn_Input_Tokens;
-                        Output_Tokens : constant Natural :=
-                          State.Turn_Output_Tokens;
-                        Ctx_Window    : constant Natural :=
-                          State.Context_Window;
-                        Parts : Unbounded_String;
-                     begin
-                        if Input_Tokens > 0
-                          and then Ctx_Window > 0
-                        then
-                           Append
-                             (Parts,
-                              "ctx "
-                              & Format_Kilo (Input_Tokens)
-                              & "/" & Format_Kilo (Ctx_Window)
-                              & " ("
-                              & Natural_Image
-                                  (Input_Tokens * 100 / Ctx_Window)
-                              & "%)");
-                        end if;
-                        if Output_Tokens > 0 then
-                           if Length (Parts) > 0 then
-                              Append (Parts, " | ");
-                           end if;
-                           Append
-                             (Parts,
-                              "^" & Format_Kilo (Output_Tokens)
-                              & " out");
-                        end if;
-                        declare
-                           Model_Text : constant String :=
-                             State.Current_Model;
-                        begin
-                           if Model_Text'Length > 0 then
-                              if Length (Parts) > 0 then
-                                 Append (Parts, " | ");
-                              end if;
-                              Append (Parts, Model_Text);
-                           end if;
-                        end;
-                        if Length (Parts) > 0 then
-                           Acme.Window.Append
-                             (Win, FS,
-                              ASCII.LF & "["
-                              & To_String (Parts) & "]" & ASCII.LF);
-                        end if;
-                     end;
-                     State.Increment_Turn_Count;
-                     Acme.Window.Append
-                       (Win, FS,
-                        Format_Separator
-                          (State.Turn_Count,
-                           State.Session_Id,
-                           Natural_Image (Natural (Getpid))));
+                     --  Append turn footer: summary and fork token on the
+                     --  same line, followed by the separator rule.
+                     Append_Live_Turn_Footer
+                       (Win   => Win,
+                        FS    => FS,
+                        State => State,
+                        PID   => Natural_Image (Natural (Getpid)));
                   end if;
                   Acme.Window.Replace_Line1
                     (Win, FS, Format_Status (State, "ready"));
@@ -1732,6 +1764,8 @@ package body Pi_Acme_App is
       Buf          : Unbounded_String;
       Last_Input   : Natural         := 0;
       Last_Output  : Natural         := 0;
+      Turn_Input   : Natural         := 0;
+      Turn_Output  : Natural         := 0;
       Cur_Model    : Unbounded_String :=
         To_Unbounded_String (State.Current_Model);
       PID_Str        : constant String := Natural_Image (Natural (Getpid));
@@ -1981,16 +2015,26 @@ package body Pi_Acme_App is
                            --  User turn
                            if Role = "user" then
                               --  If the previous turn was complete, emit
-                              --  its fork separator before this user msg.
+                              --  its footer before this user message.
                               if In_Turn and then Saw_Asst_Text then
                                  Turns_Rendered := Turns_Rendered + 1;
                                  Append
                                    (Buf,
-                                    Format_Separator
-                                      (Turns_Rendered, UUID, PID_Str));
+                                    Format_Turn_Footer
+                                      (Turn_N        => Turns_Rendered,
+                                       UUID          => UUID,
+                                       PID           => PID_Str,
+                                       Input_Tokens  => Turn_Input,
+                                       Output_Tokens => Turn_Output,
+                                       Ctx_Window    =>
+                                         State.Context_Window,
+                                       Model_Text    =>
+                                         To_String (Cur_Model)));
                               end if;
                               In_Turn       := True;
                               Saw_Asst_Text := False;
+                              Turn_Input    := 0;
+                              Turn_Output   := 0;
                               if Msg.Has_Field ("content")
                                 and then
                                   Msg.Get ("content").Kind
@@ -2062,6 +2106,8 @@ package body Pi_Acme_App is
                                            Get_Integer
                                              (Usage, "output");
                                     begin
+                                       Turn_Input  := Input_Count;
+                                       Turn_Output := Output_Count;
                                        if Input_Count > 0
                                          or else Output_Count > 0
                                        then
@@ -2359,12 +2405,19 @@ package body Pi_Acme_App is
             return;
       end;
 
-      --  Append separator for the final rendered turn (if any), then flush.
+      --  Append footer for the final rendered turn (if any), then flush.
       if In_Turn and then Saw_Asst_Text then
          Turns_Rendered := Turns_Rendered + 1;
          Append
            (Buf,
-            Format_Separator (Turns_Rendered, UUID, PID_Str));
+            Format_Turn_Footer
+              (Turn_N        => Turns_Rendered,
+               UUID          => UUID,
+               PID           => PID_Str,
+               Input_Tokens  => Turn_Input,
+               Output_Tokens => Turn_Output,
+               Ctx_Window    => State.Context_Window,
+               Model_Text    => To_String (Cur_Model)));
       end if;
       if Length (Buf) > 0 then
          Acme.Window.Append (Win, FS, To_String (Buf));
