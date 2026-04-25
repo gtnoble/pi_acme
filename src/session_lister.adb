@@ -11,6 +11,7 @@ with Ada.Directories;
 with Ada.Environment_Variables;
 with Ada.Exceptions;
 with Ada.Strings.Unbounded; use Ada.Strings.Unbounded;
+with Ada.Streams.Stream_IO;
 with Ada.Text_IO;
 with GNAT.SHA256;
 with GNATCOLL.JSON;          use GNATCOLL.JSON;
@@ -619,22 +620,35 @@ package body Session_Lister is
                       & "...")
               & " @" & Positive'Image (After_Turn)
                          (2 .. Positive'Image (After_Turn)'Last);
-            Out_File   : Ada.Text_IO.File_Type;
+            --  Ada.Streams.Stream_IO is used instead of Ada.Text_IO so
+            --  that raw UTF-8 bytes are written verbatim.
+            --  Ada.Text_IO.Put_Line with -gnatW8 re-encodes each byte
+            --  > 16#7F# as a UTF-8 sequence, which double-encodes
+            --  content that is already UTF-8 (as pi session files are).
+            Out_Str    : Ada.Streams.Stream_IO.File_Type;
+            Out_S      : Ada.Streams.Stream_IO.Stream_Access;
+
+            --  Write Line followed by a line-feed as raw bytes.
+            procedure Write_Raw_Line (Line : String) is
+            begin
+               String'Write (Out_S, Line & ASCII.LF);
+            end Write_Raw_Line;
+
          begin
             Ada.Directories.Create_Path (Target_Dir);
-            Ada.Text_IO.Create (Out_File, Ada.Text_IO.Out_File, New_Path);
+            Ada.Streams.Stream_IO.Create
+              (Out_Str, Ada.Streams.Stream_IO.Out_File, New_Path);
+            Out_S := Ada.Streams.Stream_IO.Stream (Out_Str);
 
             --  Header line: new UUID and current timestamp.
-            Ada.Text_IO.Put_Line
-              (Out_File,
-               "{""type"":""session"",""id"":"""
+            Write_Raw_Line
+              ("{""type"":""session"",""id"":"""
                & New_UUID & """,""timestamp"":"""
                & Now_Timestamp & """}");
 
             --  Session-info line with fork name.
-            Ada.Text_IO.Put_Line
-              (Out_File,
-               "{""type"":""session_info"",""name"":"""
+            Write_Raw_Line
+              ("{""type"":""session_info"",""name"":"""
                & Fork_Name & """}");
 
             --  Copy source lines, skipping the source header (line 0)
@@ -653,19 +667,19 @@ package body Session_Lister is
                         if Kind /= "session"
                           and then Kind /= "session_info"
                         then
-                           Ada.Text_IO.Put_Line (Out_File, Line);
+                           Write_Raw_Line (Line);
                         end if;
                      end;
                   end if;
                end;
             end loop;
 
-            Ada.Text_IO.Close (Out_File);
+            Ada.Streams.Stream_IO.Close (Out_Str);
             return New_UUID;
          exception
             when Ex : others =>
-               if Ada.Text_IO.Is_Open (Out_File) then
-                  Ada.Text_IO.Close (Out_File);
+               if Ada.Streams.Stream_IO.Is_Open (Out_Str) then
+                  Ada.Streams.Stream_IO.Close (Out_Str);
                end if;
                Ada.Text_IO.Put_Line
                  (Ada.Text_IO.Standard_Error,
