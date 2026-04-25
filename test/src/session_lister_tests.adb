@@ -127,6 +127,46 @@ package body Session_Lister_Tests is
               "UUID should be empty when file has no valid session record");
    end Test_Parse_Session_Bad_Json;
 
+   procedure Test_Parse_Session_Long_Line (T : in out Test) is
+      --  Regression: Ada.Text_IO.Get_Line (function form) recurses in GNAT
+      --  for every chunk of a long line, causing STORAGE_ERROR on lines
+      --  of ~100 KiB or more.  The fixed Read_Line helper uses the procedure
+      --  form in a loop and must survive any line length.
+      pragma Unreferenced (T);
+      Long_Text : constant String (1 .. 100_000) := (others => 'x');
+      Path      : constant String :=
+        "/tmp/test_pi_long_line.jsonl";
+      F         : Ada.Text_IO.File_Type;
+      Info      : Session_Info;
+   begin
+      Ada.Text_IO.Create (F, Ada.Text_IO.Out_File, Path);
+      Ada.Text_IO.Put_Line
+        (F,
+         "{""type"":""session"","
+         & """id"":""long-line-uuid"","
+         & """timestamp"":""2024-06-01T12:00:00Z""}");
+      Ada.Text_IO.Put_Line
+        (F,
+         "{""type"":""message"","
+         & """message"":{""role"":""user"","
+         & """content"":[{""type"":""text"","
+         & """text"":""" & Long_Text & """}]}}");
+      Ada.Text_IO.Close (F);
+
+      Info := Parse_Session_File (Path);
+
+      Assert (To_String (Info.UUID) = "long-line-uuid",
+              "UUID must be parsed correctly despite a 100 KiB JSONL line");
+      Assert (Length (Info.Snippet) > 0,
+              "Snippet must be extracted from the long text line");
+   exception
+      when others =>
+         if Ada.Text_IO.Is_Open (F) then
+            Ada.Text_IO.Close (F);
+         end if;
+         raise;
+   end Test_Parse_Session_Long_Line;
+
    --  ── Find_Session_File ─────────────────────────────────────────────────
    --
    --  These tests create temporary JSONL files under a dedicated test slug

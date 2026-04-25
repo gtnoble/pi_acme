@@ -639,6 +639,28 @@ package body Pi_Acme_App is
      (Index_Type   => Natural,
       Element_Type => Tool_Result_Entry);
 
+   --  ── Read_Line ─────────────────────────────────────────────────────────
+   --
+   --  Read one complete line from File into an Unbounded_String.
+   --  Unlike the Ada.Text_IO.Get_Line function form, this never overflows
+   --  the stack on very long lines: it uses the fixed-buffer procedure form
+   --  in a loop and simply appends each chunk to the result.
+
+   function Read_Line
+     (File : Ada.Text_IO.File_Type) return Unbounded_String
+   is
+      Chunk  : String (1 .. 65_536);   --  64 KiB per iteration
+      Last   : Natural;
+      Result : Unbounded_String;
+   begin
+      loop
+         Ada.Text_IO.Get_Line (File, Chunk, Last);
+         Append (Result, Chunk (1 .. Last));
+         exit when Last < Chunk'Last;
+      end loop;
+      return Result;
+   end Read_Line;
+
    --  ── Pi event dispatcher ───────────────────────────────────────────────
 
    type Section_Kind is
@@ -1832,7 +1854,7 @@ package body Pi_Acme_App is
          Ada.Text_IO.Open (File, Ada.Text_IO.In_File, Path);
          while not Ada.Text_IO.End_Of_File (File) loop
             declare
-               Line  : constant String      := Ada.Text_IO.Get_Line (File);
+               Line  : constant String      := To_String (Read_Line (File));
                Parse : constant Read_Result := Read (Line);
             begin
                if Parse.Success then
@@ -1926,7 +1948,7 @@ package body Pi_Acme_App is
          Ada.Text_IO.Open (File, Ada.Text_IO.In_File, Path);
          while not Ada.Text_IO.End_Of_File (File) loop
             declare
-               Line  : constant String      := Ada.Text_IO.Get_Line (File);
+               Line  : constant String      := To_String (Read_Line (File));
                Parse : constant Read_Result := Read (Line);
             begin
                if Parse.Success then
@@ -2463,14 +2485,62 @@ package body Pi_Acme_App is
       --  ── Pi_Stdout_Task ────────────────────────────────────────────────
 
       task body Pi_Stdout_Task is
-         My_FS      : aliased Nine_P.Client.Fs := Ns_Mount ("acme");
-         Section    : Section_Kind             := No_Section;
-         First_Boot : Boolean                  := True;
+         My_FS        : aliased Nine_P.Client.Fs := Ns_Mount ("acme");
+         Section      : Section_Kind             := No_Section;
+         First_Boot   : Boolean                  := True;
+         --  When non-empty, the top of Restart_Loop renders this session's
+         --  history and shows a loading banner before bootstrapping pi.
+         --  Seeded from the command-line --session option so that forked
+         --  (and manually resumed) sessions display their conversation
+         --  immediately; replenished by the reload path on each subsequent
+         --  session switch.
+         Pending_UUID : Unbounded_String         := Opts.Session_Id;
+         --  True when Pending_UUID was set by the reload path rather than
+         --  the initial startup.  Controls whether Signal_Restart_Done is
+         --  called after the render to unblock Pi_Stderr_Task; the call is
+         --  correct only when Pi_Stderr_Task is actually blocked on
+         --  Wait_Restart_Complete, which only happens after its first
+         --  stderr EOF (i.e. not during the very first boot).
+         Is_Reload    : Boolean                  := False;
       begin
          Restart_Loop : loop
-            --  Bootstrap: always send get_state; send set_model only on
-            --  the first start (on session reload the model comes from the
-            --  session itself via the get_state / model_select response).
+
+            --  ① Render phase — fires whenever a session UUID is pending.
+            --  Handles both the initial --session startup and every live
+            --  reload through a single code path.
+            if Length (Pending_UUID) > 0 then
+               declare
+                  UUID_Str : constant String := To_String (Pending_UUID);
+                  Short_Id : constant String :=
+                    (if UUID_Str'Length >= 8
+                     then UUID_Str (UUID_Str'First
+                                    .. UUID_Str'First + 7)
+                     else UUID_Str);
+               begin
+                  Acme.Window.Append
+                    (Win, My_FS'Access,
+                     ASCII.LF
+                     & "[Loading session " & Short_Id & UC_ELLIP & "]"
+                     & ASCII.LF);
+                  Render_Session_History
+                    (UUID  => UUID_Str,
+                     Win   => Win,
+                     FS    => My_FS'Access,
+                     State => State);
+               end;
+               Pending_UUID := Null_Unbounded_String;
+               --  For reloads: unblock Pi_Stderr_Task now that the new pi
+               --  process is running and the history render is complete.
+               --  Not called on first boot — Pi_Stderr_Task does not wait
+               --  on Wait_Restart_Complete until after its first stderr EOF.
+               if Is_Reload then
+                  Is_Reload := False;
+                  State.Signal_Restart_Done;
+               end if;
+            end if;
+
+            --  ② Bootstrap phase: send get_state; send set_model on first
+            --  boot only (on a reload the model comes from the session).
             Pi_RPC.Send (Proc, "{""type"":""get_state""}");
             if First_Boot then
                First_Boot := False;
@@ -2497,7 +2567,8 @@ package body Pi_Acme_App is
                   end;
                end if;
             end if;
-            --  Main read loop: dispatch pi JSON events until EOF.
+
+            --  ③ Read phase: dispatch pi JSON events until EOF.
             Read_Loop : loop
                declare
                   Line : constant String := Pi_RPC.Read_Line (Proc);
@@ -2521,36 +2592,22 @@ package body Pi_Acme_App is
                   end;
                end;
             end loop Read_Loop;
-            --  EOF: check for a pending session reload.
+
+            --  ④ EOF phase: handle reload or exit.
+            --  On reload: start the new pi process immediately (it stays
+            --  silent until get_state is sent in the next iteration's
+            --  bootstrap phase) and queue the render for the next iteration.
             declare
                UUID          : Unbounded_String;
                Was_Requested : Boolean;
             begin
                State.Consume_Reload (UUID, Was_Requested);
                if Was_Requested then
-                  declare
-                     UUID_Str : constant String := To_String (UUID);
-                     Short_Id : constant String :=
-                       (if UUID_Str'Length >= 8
-                        then UUID_Str (UUID_Str'First
-                                       .. UUID_Str'First + 7)
-                        else UUID_Str);
-                  begin
-                     Acme.Window.Append
-                       (Win, My_FS'Access,
-                        ASCII.LF
-                        & "[Loading session " & Short_Id & UC_ELLIP & "]"
-                        & ASCII.LF);
-                     Render_Session_History
-                       (UUID  => UUID_Str,
-                        Win   => Win,
-                        FS    => My_FS'Access,
-                        State => State);
-                     Pi_RPC.Restart (Proc, UUID_Str);
-                  end;
-                  Section := No_Section;
-                  State.Signal_Restart_Done;
-                  --  Continue Restart_Loop: bootstrap and read the new pi.
+                  Pi_RPC.Restart (Proc, To_String (UUID));
+                  Section      := No_Section;
+                  Pending_UUID := UUID;
+                  Is_Reload    := True;
+                  --  Restart_Loop continues; render fires next iteration.
                else
                   --  Normal shutdown or unexpected EOF — unblock
                   --  Pi_Stderr_Task.
@@ -2558,6 +2615,7 @@ package body Pi_Acme_App is
                   exit Restart_Loop;
                end if;
             end;
+
          end loop Restart_Loop;
       exception
          when Ex : others =>

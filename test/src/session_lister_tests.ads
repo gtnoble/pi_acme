@@ -16,6 +16,9 @@ package Session_Lister_Tests is
    procedure Test_Parse_Session_Full     (T : in out Test);
    procedure Test_Parse_Session_No_Name  (T : in out Test);
    procedure Test_Parse_Session_Bad_Json (T : in out Test);
+   procedure Test_Parse_Session_Long_Line (T : in out Test);
+   --  ^ Regression test: Parse_Session_File must not raise STORAGE_ERROR
+   --    when a JSONL line exceeds GNAT's internal Get_Line stack buffer.
 
    --  Find_Session_File (creates temp files under $HOME/.pi/agent/sessions/)
    procedure Test_Find_Session_File_Found     (T : in out Test);

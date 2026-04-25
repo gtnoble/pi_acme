@@ -163,6 +163,28 @@ package body Session_Lister is
       return "";
    end First_User_Text;
 
+   --  ── Read_Line ─────────────────────────────────────────────────────────
+   --
+   --  Read one complete line from File into an Unbounded_String.
+   --  Unlike the Ada.Text_IO.Get_Line function form, this never overflows
+   --  the stack on very long lines: it uses the fixed-buffer procedure form
+   --  in a loop and simply appends each chunk to the result.
+
+   function Read_Line
+     (File : Ada.Text_IO.File_Type) return Unbounded_String
+   is
+      Chunk  : String (1 .. 65_536);   --  64 KiB per iteration
+      Last   : Natural;
+      Result : Unbounded_String;
+   begin
+      loop
+         Ada.Text_IO.Get_Line (File, Chunk, Last);
+         Append (Result, Chunk (1 .. Last));
+         exit when Last < Chunk'Last;
+      end loop;
+      return Result;
+   end Read_Line;
+
    --  ── Parse_Session_File ────────────────────────────────────────────────
 
    function Parse_Session_File (Path : String) return Session_Info is
@@ -173,7 +195,7 @@ package body Session_Lister is
       Ada.Text_IO.Open (File, Ada.Text_IO.In_File, Path);
       while not Ada.Text_IO.End_Of_File (File) loop
          declare
-            Line : constant String := Ada.Text_IO.Get_Line (File);
+            Line : constant String := To_String (Read_Line (File));
          begin
             if Line'Length > 0 then
                Line_N := Line_N + 1;
@@ -224,6 +246,11 @@ package body Session_Lister is
                end;
             end if;
          end;
+         --  Once we have the session UUID and the first-message snippet,
+         --  all metadata we need has been found.  Stop reading to avoid
+         --  processing the remainder of a potentially very large file.
+         exit when Length (Result.UUID) > 0
+           and then Length (Result.Snippet) > 0;
       end loop;
       Ada.Text_IO.Close (File);
       return Result;
@@ -446,8 +473,7 @@ package body Session_Lister is
       begin
          Ada.Text_IO.Open (File, Ada.Text_IO.In_File, Source_Path);
          while not Ada.Text_IO.End_Of_File (File) loop
-            Source_Lines.Append
-              (To_Unbounded_String (Ada.Text_IO.Get_Line (File)));
+            Source_Lines.Append (Read_Line (File));
          end loop;
          Ada.Text_IO.Close (File);
       exception

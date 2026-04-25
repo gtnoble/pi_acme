@@ -309,6 +309,9 @@ package body Test_Suites is
         ("Parse session JSONL with bad JSON",
          Session_Lister_Tests.Test_Parse_Session_Bad_Json'Access));
       Result.Add_Test (Session_Lister_Caller.Create
+        ("Parse session JSONL with a very long line (no stack overflow)",
+         Session_Lister_Tests.Test_Parse_Session_Long_Line'Access));
+      Result.Add_Test (Session_Lister_Caller.Create
         ("Find_Session_File found in test dir",
          Session_Lister_Tests.Test_Find_Session_File_Found'Access));
       Result.Add_Test (Session_Lister_Caller.Create
