@@ -153,30 +153,28 @@ package body Pi_RPC is
    is
       Chunk      : String (1 .. 4096);
       Bytes_Read : Integer;
+      Pos        : Natural;
    begin
       loop
-         --  Scan Buffer for a newline.
-         declare
-            Current : constant String := To_String (Buffer);
-         begin
-            for I in Current'Range loop
-               if Current (I) = ASCII.LF then
-                  declare
-                     Line : constant String :=
-                       Current (Current'First .. I - 1);
-                  begin
-                     Buffer :=
-                       To_Unbounded_String (Current (I + 1 .. Current'Last));
-                     return Line;
-                  end;
-               end if;
-            end loop;
-         end;
+         --  Search Buffer for a newline without copying the whole buffer to
+         --  the stack.  To_String (Buffer) on a multi-MB buffer overflows the
+         --  GNAT secondary stack, converting the resulting SIGSEGV to
+         --  STORAGE_ERROR.  Index + Slice + Delete operate on the
+         --  Unbounded_String directly and only materialise the line itself.
+         Pos := Index (Buffer, "" & ASCII.LF);
+         if Pos > 0 then
+            declare
+               Line : constant String := Slice (Buffer, 1, Pos - 1);
+            begin
+               Delete (Buffer, 1, Pos);
+               return Line;
+            end;
+         end if;
 
          --  Need more bytes.
          Bytes_Read := Read (FD, Chunk);
-         if Bytes_Read = 0 then
-            --  EOF: return any partial content.
+         if Bytes_Read <= 0 then
+            --  EOF (0) or I/O error (<0): return any partial content.
             declare
                Last : constant String := To_String (Buffer);
             begin

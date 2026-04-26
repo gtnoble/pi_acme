@@ -32,6 +32,13 @@ package Pi_Acme_App is
       function Is_Compacting      return Boolean;
       function Was_Aborted        return Boolean;
       function Text_Emitted       return Boolean;
+      --  True while an auto-retry sequence is in progress.  Set by
+      --  auto_retry_start, cleared by auto_retry_end and explicit reset
+      --  points (new_session response, session reload).  Used to suppress
+      --  the spurious "No response" message for all but the first failed
+      --  attempt: pi emits agent_end before auto_retry_start, so the first
+      --  failure always arrives before we know a retry is coming.
+      function Is_Retrying        return Boolean;
       --  True only when at least one text_delta arrived in the current
       --  agent turn (tool-only turns leave this False).
       function Has_Text_Delta     return Boolean;
@@ -50,6 +57,7 @@ package Pi_Acme_App is
       procedure Set_Streaming      (Value : Boolean);
       procedure Set_Compacting     (Value : Boolean);
       procedure Set_Aborted        (Value : Boolean);
+      procedure Set_Is_Retrying    (Value : Boolean);
       procedure Set_Text_Emitted   (Value : Boolean);
       procedure Set_Has_Text_Delta (Value : Boolean);
       procedure Set_Pending_Stats  (Value : Boolean);
@@ -90,6 +98,7 @@ package Pi_Acme_App is
       P_Streaming     : Boolean := False;
       P_Compacting    : Boolean := False;
       P_Aborted       : Boolean := False;
+      P_Is_Retrying   : Boolean := False;
       P_Text_Emitted  : Boolean := False;
       P_Has_Text_Delta : Boolean := False;
       P_Pending_Stats : Boolean := False;

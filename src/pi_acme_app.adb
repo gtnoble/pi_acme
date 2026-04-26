@@ -18,6 +18,7 @@ with GNATCOLL.OS.FS;
 with GNATCOLL.OS.Process;
 with Nine_P;                 use Nine_P;
 with Nine_P.Client;          use Nine_P.Client;
+with Nine_P.Proto;
 with Acme;
 with Acme.Event_Parser;
 with Acme.Raw_Events;
@@ -88,6 +89,7 @@ package body Pi_Acme_App is
       function Is_Streaming       return Boolean is (P_Streaming);
       function Is_Compacting      return Boolean is (P_Compacting);
       function Was_Aborted        return Boolean is (P_Aborted);
+      function Is_Retrying        return Boolean is (P_Is_Retrying);
       function Text_Emitted       return Boolean is (P_Text_Emitted);
       function Has_Text_Delta     return Boolean is (P_Has_Text_Delta);
       function Pending_Stats      return Boolean is (P_Pending_Stats);
@@ -132,6 +134,11 @@ package body Pi_Acme_App is
       begin
          P_Aborted := Value;
       end Set_Aborted;
+
+      procedure Set_Is_Retrying (Value : Boolean) is
+      begin
+         P_Is_Retrying := Value;
+      end Set_Is_Retrying;
 
       procedure Set_Text_Emitted (Value : Boolean) is
       begin
@@ -958,11 +965,22 @@ package body Pi_Acme_App is
             Acme.Window.Append
               (Win, FS, ASCII.LF & "[STOP] Aborted." & ASCII.LF);
             State.Set_Aborted (False);
-         elsif not State.Text_Emitted then
+         elsif not State.Text_Emitted
+           and then not State.Is_Retrying
+         then
+            --  No text and no retry in flight: either the context is too
+            --  long (the most common cause) or a non-retryable error
+            --  occurred.  If auto-retry is handling a transient API error
+            --  it will emit auto_retry_start right after this event, which
+            --  sets Is_Retrying and suppresses this message on all
+            --  subsequent retry attempts.
             Acme.Window.Append
               (Win, FS,
                ASCII.LF
-               & UC_WARN & " No response -- context may be full. Try New."
+               & UC_WARN
+               & " No response from pi"
+               & " -- context may be too long, or a temporary error"
+               & " occurred. Try New."
                & ASCII.LF);
          end if;
          --  Only emit the stats summary and turn separator when the
@@ -1226,7 +1244,15 @@ package body Pi_Acme_App is
       --  Emitted by pi before each retry attempt.  Show a compact notice
       --  so the user can see why the turn is being retried and how long
       --  the backoff delay is.
+      --
+      --  NOTE: pi emits agent_end BEFORE this event.  Setting Is_Retrying
+      --  here means the flag is True for all subsequent agent_end events
+      --  within the same retry sequence (i.e. the 2nd, 3rd, … failed
+      --  attempt), suppressing the spurious "No response" message for
+      --  those attempts.  The very first failure is shown once, followed
+      --  immediately by this retry notice.
       elsif Kind = "auto_retry_start" then
+         State.Set_Is_Retrying (True);
          declare
             Attempt     : constant Natural :=
               Get_Integer (Event, "attempt");
@@ -1259,6 +1285,7 @@ package body Pi_Acme_App is
       --  On success pi immediately continues streaming so no extra note is
       --  needed.  On failure show the final error prominently.
       elsif Kind = "auto_retry_end" then
+         State.Set_Is_Retrying (False);
          if not Get_Boolean (Event, "success") then
             declare
                Final_Err : constant String := Get_String (Event, "finalError");
@@ -1328,6 +1355,34 @@ package body Pi_Acme_App is
                Acme.Window.Append
                  (Win, FS,
                   ASCII.LF & UC_CHECK & " Context compacted." & ASCII.LF);
+            end if;
+         end;
+         Acme.Window.Replace_Line1
+           (Win, FS,
+            Format_Status
+              (State,
+               (if State.Is_Streaming then "running" else "ready")));
+
+      --  ── model_select ─────────────────────────────────────────────────
+      --  Emitted by pi when the active model changes (e.g. on startup
+      --  before the get_state response arrives, or when cycleModel fires).
+      --  Update our cached model/context-window so the tag and status line
+      --  stay accurate.  Mirrors the handling in the Python reference.
+      elsif Kind = "model_select" then
+         declare
+            Model_Val  : constant JSON_Value := Get_Object (Event, "model");
+            Provider   : constant String     :=
+              Get_String  (Model_Val, "provider");
+            Model_Id   : constant String     :=
+              Get_String  (Model_Val, "id");
+            Ctx_Window : constant Natural    :=
+              Get_Integer (Model_Val, "contextWindow");
+         begin
+            if Provider'Length > 0 and then Model_Id'Length > 0 then
+               State.Set_Model (Provider & "/" & Model_Id);
+            end if;
+            if Ctx_Window > 0 then
+               State.Set_Context_Window (Ctx_Window);
             end if;
          end;
          Acme.Window.Replace_Line1
@@ -1458,6 +1513,7 @@ package body Pi_Acme_App is
                elsif Command = "new_session" then
                   State.Set_Turn_Tokens (0, 0);
                   State.Reset_Turn_Count;
+                  State.Set_Is_Retrying (False);
                   Pi_RPC.Send (Proc, "{""type"":""get_state""}");
 
                elsif Command = "get_session_stats" then
@@ -1531,6 +1587,32 @@ package body Pi_Acme_App is
                end if;
             end;
          end if;
+
+      --  ── unknown event type ────────────────────────────────────────────
+      --  Any event type not handled above is shown as a diagnostic line so
+      --  that new pi error events or future protocol additions surface in
+      --  the window rather than being silently swallowed.
+      --  Well-known metadata events emitted by pi-agent-core that carry no
+      --  user-visible information (turn_start, turn_end, message_start,
+      --  tool_execution_update) are listed explicitly so they remain quiet.
+      elsif Kind'Length > 0
+        and then Kind not in
+          "turn_start" | "turn_end" | "message_start"
+          | "tool_execution_update"
+      then
+         declare
+            Err : constant String := Get_String (Event, "error");
+            Msg : constant String := Get_String (Event, "errorMessage");
+            Detail : constant String :=
+              (if Err'Length > 0 then ": " & Err
+               elsif Msg'Length > 0 then ": " & Msg
+               else "");
+         begin
+            Acme.Window.Append
+              (Win, FS,
+               ASCII.LF & "[pi:" & Kind & "]"
+               & Detail & ASCII.LF);
+         end;
       end if;
    end Dispatch_Pi_Event;
 
@@ -2604,6 +2686,7 @@ package body Pi_Acme_App is
                State.Consume_Reload (UUID, Was_Requested);
                if Was_Requested then
                   Pi_RPC.Restart (Proc, To_String (UUID));
+                  State.Set_Is_Retrying (False);
                   Section      := No_Section;
                   Pending_UUID := UUID;
                   Is_Reload    := True;
@@ -2891,24 +2974,37 @@ package body Pi_Acme_App is
                                    Acme.Window.Selection_Text
                                      (Win, My_FS'Access);
                               begin
-                                 if Sel'Length > 0
-                                   and then not State.Is_Streaming
-                                 then
-                                    Acme.Window.Append
-                                      (Win, My_FS'Access,
-                                       ASCII.LF & UC_TRI_R
-                                       & " " & Sel & ASCII.LF);
-                                    declare
-                                       Msg : constant JSON_Value :=
-                                         Create_Object;
-                                    begin
-                                       Msg.Set_Field
-                                         ("type", Create ("prompt"));
-                                       Msg.Set_Field
-                                         ("message", Create (Sel));
-                                       Pi_RPC.Send
-                                         (Proc, Write (Msg));
-                                    end;
+                                 if Sel'Length > 0 then
+                                    if State.Is_Streaming
+                                      or else State.Is_Retrying
+                                    then
+                                       Acme.Window.Append
+                                         (Win, My_FS'Access,
+                                          ASCII.LF & UC_WARN
+                                          & " Agent is running"
+                                          & (if State.Is_Retrying
+                                             then " (retrying)"
+                                             else "")
+                                          & " -- use Steer to redirect"
+                                          & " or Stop first."
+                                          & ASCII.LF);
+                                    else
+                                       Acme.Window.Append
+                                         (Win, My_FS'Access,
+                                          ASCII.LF & UC_TRI_R
+                                          & " " & Sel & ASCII.LF);
+                                       declare
+                                          Msg : constant JSON_Value :=
+                                            Create_Object;
+                                       begin
+                                          Msg.Set_Field
+                                            ("type", Create ("prompt"));
+                                          Msg.Set_Field
+                                            ("message", Create (Sel));
+                                          Pi_RPC.Send
+                                            (Proc, Write (Msg));
+                                       end;
+                                    end if;
                                  end if;
                               end;
                            elsif Text = "Stop" then
@@ -3108,6 +3204,17 @@ package body Pi_Acme_App is
          end loop;
          State.Signal_Shutdown;
       exception
+         when Ex : Nine_P.Proto.P9_Error =>
+            --  "deleted window" is the normal error returned by the acme
+            --  9P server when the user closes the window; treat it as a
+            --  clean exit rather than a fault.
+            if Ada.Exceptions.Exception_Message (Ex) /= "deleted window" then
+               Ada.Text_IO.Put_Line
+                 (Ada.Text_IO.Standard_Error,
+                  "Acme_Event_Task terminated: "
+                  & Ada.Exceptions.Exception_Information (Ex));
+            end if;
+            State.Signal_Shutdown;
          when Ex : others =>
             Ada.Text_IO.Put_Line
               (Ada.Text_IO.Standard_Error,

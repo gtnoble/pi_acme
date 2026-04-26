@@ -366,6 +366,65 @@ package body Pi_Acme_App_Tests is
       Assert (S.Turn_Count = 0, "Reset_Turn_Count should set count back to 0");
    end Test_State_Turn_Count_Reset;
 
+   --  ── App_State Is_Retrying ────────────────────────────────────────────
+   --
+   --  Is_Retrying tracks whether an auto-retry sequence is currently in
+   --  flight.  It is set by the auto_retry_start event handler and cleared
+   --  by auto_retry_end, new_session, and session reload.  The flag is used
+   --  in the agent_end handler to suppress the spurious "No response" message
+   --  for every failed attempt after the first: pi emits agent_end before
+   --  auto_retry_start, so the very first failure always sees Is_Retrying =
+   --  False, but subsequent retry cycles see Is_Retrying = True.
+
+   --  Is_Retrying defaults to False on a freshly created App_State.
+   procedure Test_State_Is_Retrying_Initial (T : in out Test) is
+      pragma Unreferenced (T);
+      S : App_State;
+   begin
+      Assert (not S.Is_Retrying,
+              "Is_Retrying should be False initially");
+   end Test_State_Is_Retrying_Initial;
+
+   --  Set_Is_Retrying toggles the flag in both directions.
+   procedure Test_State_Is_Retrying_Set_And_Clear (T : in out Test) is
+      pragma Unreferenced (T);
+      S : App_State;
+   begin
+      S.Set_Is_Retrying (True);
+      Assert (S.Is_Retrying,
+              "Is_Retrying should be True after Set_Is_Retrying(True)");
+      S.Set_Is_Retrying (False);
+      Assert (not S.Is_Retrying,
+              "Is_Retrying should be False after Set_Is_Retrying(False)");
+   end Test_State_Is_Retrying_Set_And_Clear;
+
+   --  Is_Retrying is independent of Text_Emitted and Has_Text_Delta.
+   --  Setting one must not affect the others; the agent_end handler reads
+   --  all three independently.
+   procedure Test_State_Is_Retrying_Independent (T : in out Test) is
+      pragma Unreferenced (T);
+      S : App_State;
+   begin
+      --  Set only Is_Retrying; the text flags must stay False.
+      S.Set_Is_Retrying (True);
+      Assert (not S.Text_Emitted,
+              "Text_Emitted must stay False when only Is_Retrying is set");
+      Assert (not S.Has_Text_Delta,
+              "Has_Text_Delta must stay False when only Is_Retrying is set");
+
+      --  Set Text_Emitted; Is_Retrying must be unaffected.
+      S.Set_Text_Emitted (True);
+      Assert (S.Is_Retrying,
+              "Is_Retrying must remain True after Set_Text_Emitted");
+
+      --  Clear Is_Retrying; Text_Emitted must be unaffected.
+      S.Set_Is_Retrying (False);
+      Assert (not S.Is_Retrying,
+              "Is_Retrying should be False after Set_Is_Retrying(False)");
+      Assert (S.Text_Emitted,
+              "Text_Emitted must remain True after clearing Is_Retrying");
+   end Test_State_Is_Retrying_Independent;
+
    --  ── App_State Has_Text_Delta ──────────────────────────────────────────
 
    --  Has_Text_Delta defaults to False on a freshly created App_State.

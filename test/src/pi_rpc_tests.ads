@@ -15,4 +15,10 @@ package Pi_RPC_Tests is
    procedure Test_Process_Exits          (T : in out Test);
    procedure Test_Send_To_Cat            (T : in out Test);
 
+   --  Regression / edge-case tests for Next_Line
+   procedure Test_Read_Very_Long_Line    (T : in out Test);
+   --  Read_Line must return partial content when a process exits without
+   --  writing a final newline.
+   procedure Test_Read_No_Trailing_Newline (T : in out Test);
+
 end Pi_RPC_Tests;

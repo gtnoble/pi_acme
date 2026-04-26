@@ -262,6 +262,12 @@ package body Test_Suites is
       Result.Add_Test (Pi_RPC_Caller.Create
         ("Send lines to cat and read back",
          Pi_RPC_Tests.Test_Send_To_Cat'Access));
+      Result.Add_Test (Pi_RPC_Caller.Create
+        ("Read_Line handles 1 MiB line without stack overflow",
+         Pi_RPC_Tests.Test_Read_Very_Long_Line'Access));
+      Result.Add_Test (Pi_RPC_Caller.Create
+        ("Read_Line returns partial content at EOF without trailing newline",
+         Pi_RPC_Tests.Test_Read_No_Trailing_Newline'Access));
 
       --  pi interface tests (github-copilot/gpt-5-mini, free tier)
       Result.Add_Test (Pi_Iface_Caller.Create
@@ -401,6 +407,15 @@ package body Test_Suites is
       Result.Add_Test (App_State_Caller.Create
         ("App_State Turn_Count reset",
          Pi_Acme_App_Tests.Test_State_Turn_Count_Reset'Access));
+      Result.Add_Test (App_State_Caller.Create
+        ("App_State Is_Retrying initial value is False",
+         Pi_Acme_App_Tests.Test_State_Is_Retrying_Initial'Access));
+      Result.Add_Test (App_State_Caller.Create
+        ("App_State Is_Retrying set and clear",
+         Pi_Acme_App_Tests.Test_State_Is_Retrying_Set_And_Clear'Access));
+      Result.Add_Test (App_State_Caller.Create
+        ("App_State Is_Retrying independent of text flags",
+         Pi_Acme_App_Tests.Test_State_Is_Retrying_Independent'Access));
       Result.Add_Test (App_State_Caller.Create
         ("App_State Has_Text_Delta initial value is False",
          Pi_Acme_App_Tests.Test_State_Has_Text_Delta_Initial'Access));

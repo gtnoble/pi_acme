@@ -104,4 +104,38 @@ package body Pi_RPC_Tests is
               "cat should echo 'second line'");
    end Test_Send_To_Cat;
 
+   --  ── Regression / edge-case tests ─────────────────────────────────────
+
+   procedure Test_Read_Very_Long_Line (T : in out Test) is
+      pragma Unreferenced (T);
+      --  Regression: the old Next_Line called To_String (Buffer) on every
+      --  iteration, copying the entire accumulated buffer onto the GNAT
+      --  secondary stack.  A 1 MiB line caused STORAGE_ERROR via SIGSEGV
+      --  converted by the s-intman signal handler.  The fix uses
+      --  Ada.Strings.Unbounded.Index / Slice / Delete so the full buffer is
+      --  never materialised on the stack.
+      Expected_Length : constant := 1_048_576;
+      P    : Pi_RPC.Process :=
+               Spawn_Shell ("python3 -c ""print('a' * 1048576)""");
+      Line : constant String := Read_Line (P);
+   begin
+      Assert
+        (Line'Length = Expected_Length,
+         "Very long line: expected length"
+         & Expected_Length'Image
+         & ", got" & Line'Length'Image);
+   end Test_Read_Very_Long_Line;
+
+   procedure Test_Read_No_Trailing_Newline (T : in out Test) is
+      pragma Unreferenced (T);
+      --  When a process writes content and exits without a final newline,
+      --  Read_Line must return the partial content rather than dropping it.
+      P    : Pi_RPC.Process := Spawn_Shell ("printf 'no-newline'");
+      Line : constant String := Read_Line (P);
+   begin
+      Assert
+        (Line = "no-newline",
+         "Partial line at EOF should be returned, got: '" & Line & "'");
+   end Test_Read_No_Trailing_Newline;
+
 end Pi_RPC_Tests;

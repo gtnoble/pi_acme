@@ -37,6 +37,14 @@ package Pi_Acme_App_Tests is
    procedure Test_State_Turn_Count_Set       (T : in out Test);
    procedure Test_State_Turn_Count_Reset     (T : in out Test);
 
+   --  App_State Is_Retrying — tracks whether an auto-retry sequence is in
+   --  flight.  Set by auto_retry_start, cleared by auto_retry_end and
+   --  explicit reset points (new_session, session reload).  Used in
+   --  agent_end to suppress the repeated "No response" message.
+   procedure Test_State_Is_Retrying_Initial     (T : in out Test);
+   procedure Test_State_Is_Retrying_Set_And_Clear (T : in out Test);
+   procedure Test_State_Is_Retrying_Independent (T : in out Test);
+
    --  App_State Has_Text_Delta — tracks whether a text_delta arrived in the
    --  current agent turn; used to gate the turn separator on agent_end so
    --  that tool-only (or error/retry) turns do not emit a spurious separator.
