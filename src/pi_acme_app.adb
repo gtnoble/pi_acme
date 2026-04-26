@@ -2822,17 +2822,25 @@ package body Pi_Acme_App is
             Ctx_Start : constant Natural :=
               (if Anchor > 200 then Anchor - 200 else 0);
             Ctx_End   : constant Natural := Anchor + 200;
-            Context   : constant String  :=
-              Acme.Window.Read_Chars
-                (Win, My_FS'Access, Ctx_Start, Ctx_End);
-            Token     : constant String  :=
-              Scan_Tool_Token (Context, Ctx_Start, Anchor);
          begin
-            if Token'Length = 0 then
-               return False;
-            end if;
-            Run_Llm_Chat_Open (Token);
-            return True;
+            --  Read_Chars and Scan_Tool_Token are inside a block so that
+            --  any P9_Error raised during their elaboration is caught by
+            --  the outer "when others" handler below.  (Exceptions raised
+            --  during a subprogram body's own declarative-part elaboration
+            --  bypass that body's handlers per Ada RM 11.4.)
+            declare
+               Context : constant String :=
+                 Acme.Window.Read_Chars
+                   (Win, My_FS'Access, Ctx_Start, Ctx_End);
+               Token   : constant String :=
+                 Scan_Tool_Token (Context, Ctx_Start, Anchor);
+            begin
+               if Token'Length = 0 then
+                  return False;
+               end if;
+               Run_Llm_Chat_Open (Token);
+               return True;
+            end;
          exception
             when others =>
                return False;
@@ -2895,51 +2903,59 @@ package body Pi_Acme_App is
             Ctx_Start : constant Natural :=
               (if Anchor > 200 then Anchor - 200 else 0);
             Ctx_End   : constant Natural := Anchor + 200;
-            Context   : constant String  :=
-              Acme.Window.Read_Chars
-                (Win, My_FS'Access, Ctx_Start, Ctx_End);
-            Token     : constant String  :=
-              Scan_Fork_Token (Context, Ctx_Start, Anchor);
          begin
-            if Token'Length = 0 then
-               return False;
-            end if;
-            --  Parse "fork+PID/UUID/N" — split on the first and last '/'.
+            --  Read_Chars and Scan_Fork_Token are inside a block so that
+            --  any P9_Error raised during their elaboration is caught by
+            --  the outer "when others" handler below.  (Exceptions raised
+            --  during a subprogram body's own declarative-part elaboration
+            --  bypass that body's handlers per Ada RM 11.4.)
             declare
-               After_Plus  : constant Natural := Token'First + 5;
-               First_Slash : Natural          := 0;
-               Last_Slash  : Natural          := 0;
+               Context : constant String :=
+                 Acme.Window.Read_Chars
+                   (Win, My_FS'Access, Ctx_Start, Ctx_End);
+               Token   : constant String :=
+                 Scan_Fork_Token (Context, Ctx_Start, Anchor);
             begin
-               for I in After_Plus .. Token'Last loop
-                  if Token (I) = '/' then
-                     if First_Slash = 0 then
-                        First_Slash := I;
-                     end if;
-                     Last_Slash := I;
-                  end if;
-               end loop;
-               if First_Slash = 0 or else First_Slash = Last_Slash then
+               if Token'Length = 0 then
                   return False;
                end if;
+               --  Parse "fork+PID/UUID/N" — split on the first and last '/'.
                declare
-                  Token_PID : constant String :=
-                    Token (After_Plus .. First_Slash - 1);
-                  Sess_UUID : constant String :=
-                    Token (First_Slash + 1 .. Last_Slash - 1);
-                  Turn_Str  : constant String :=
-                    Token (Last_Slash + 1 .. Token'Last);
-                  Turn_N    : Positive;
+                  After_Plus  : constant Natural := Token'First + 5;
+                  First_Slash : Natural          := 0;
+                  Last_Slash  : Natural          := 0;
                begin
-                  --  Only handle tokens addressed to this process.
-                  if Token_PID /= My_PID then
+                  for I in After_Plus .. Token'Last loop
+                     if Token (I) = '/' then
+                        if First_Slash = 0 then
+                           First_Slash := I;
+                        end if;
+                        Last_Slash := I;
+                     end if;
+                  end loop;
+                  if First_Slash = 0 or else First_Slash = Last_Slash then
                      return False;
                   end if;
-                  Turn_N := Positive'Value (Turn_Str);
-                  Fork_And_Open (Sess_UUID, Turn_N);
-                  return True;
-               exception
-                  when Constraint_Error =>
-                     return False;
+                  declare
+                     Token_PID : constant String :=
+                       Token (After_Plus .. First_Slash - 1);
+                     Sess_UUID : constant String :=
+                       Token (First_Slash + 1 .. Last_Slash - 1);
+                     Turn_Str  : constant String :=
+                       Token (Last_Slash + 1 .. Token'Last);
+                     Turn_N    : Positive;
+                  begin
+                     --  Only handle tokens addressed to this process.
+                     if Token_PID /= My_PID then
+                        return False;
+                     end if;
+                     Turn_N := Positive'Value (Turn_Str);
+                     Fork_And_Open (Sess_UUID, Turn_N);
+                     return True;
+                  exception
+                     when Constraint_Error =>
+                        return False;
+                  end;
                end;
             end;
          exception
