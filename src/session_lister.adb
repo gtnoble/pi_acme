@@ -302,13 +302,6 @@ package body Session_Lister is
 
       --  Sort newest first by Date (ISO strings sort lexicographically).
       declare
-         procedure Swap (A, B : in out Session_Info) is
-            Tmp : constant Session_Info := A;
-         begin
-            A := B;
-            B := Tmp;
-         end Swap;
-
          function Newer (A, B : Session_Info) return Boolean is
          begin
             return To_String (A.Date) > To_String (B.Date);
@@ -342,7 +335,6 @@ package body Session_Lister is
 
    function Find_Session_File (UUID : String) return String is
       use Ada.Directories;
-      use Ada.Environment_Variables;
 
       Home    : constant String :=
         (if Ada.Environment_Variables.Exists ("HOME")

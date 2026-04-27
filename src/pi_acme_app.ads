@@ -46,8 +46,17 @@ package Pi_Acme_App is
       function Context_Window     return Natural;
       function Turn_Input_Tokens  return Natural;
       function Turn_Output_Tokens return Natural;
-      function Turn_Count         return Natural;
-      function Win_Name           return String;
+      function Turn_Count            return Natural;
+      --  Per-turn cost captured from message_end (units of $0.0001).
+      function Turn_Cost_Dmil        return Natural;
+      --  Cumulative session stats from the last get_session_stats response.
+      function Session_Cost_Dmil     return Natural;
+      function Session_Input_Tokens  return Natural;
+      function Session_Output_Tokens return Natural;
+      function Session_Cache_Read    return Natural;
+      function Session_Cache_Write   return Natural;
+      function Session_Total_Tokens  return Natural;
+      function Win_Name              return String;
 
       --  Writers
       procedure Set_Session_Id     (Id    : String);
@@ -63,6 +72,16 @@ package Pi_Acme_App is
       procedure Set_Pending_Stats  (Value : Boolean);
       procedure Set_Context_Window (N     : Natural);
       procedure Set_Turn_Tokens    (Input, Output : Natural);
+      --  Per-turn cost from message_end usage.cost.total (units of $0.0001).
+      procedure Set_Turn_Cost      (Dmil : Natural);
+      --  Store the full get_session_stats payload atomically.
+      procedure Set_Session_Stats
+        (Cost_Dmil   : Natural;
+         Input       : Natural;
+         Output      : Natural;
+         Cache_Read  : Natural;
+         Cache_Write : Natural;
+         Total       : Natural);
       procedure Set_Win_Name       (Name  : String);
 
       --  Turn counter — incremented after each completed agent turn,
@@ -105,6 +124,15 @@ package Pi_Acme_App is
       P_Ctx_Win       : Natural := 0;
       P_Turn_In       : Natural := 0;
       P_Turn_Out      : Natural := 0;
+      --  Per-turn cost (units of $0.0001); set from message_end.
+      P_Turn_Cost     : Natural := 0;
+      --  Cumulative session stats; set from get_session_stats response.
+      P_Sess_Cost     : Natural := 0;
+      P_Sess_In       : Natural := 0;
+      P_Sess_Out      : Natural := 0;
+      P_Sess_Cache_R  : Natural := 0;
+      P_Sess_Cache_W  : Natural := 0;
+      P_Sess_Total    : Natural := 0;
       P_Win_Name      : Ada.Strings.Unbounded.Unbounded_String;
       P_Shutdown      : Boolean := False;
       P_Turn_Count    : Natural := 0;
@@ -147,11 +175,13 @@ package Pi_Acme_App is
    --  Append the live end-of-turn footer to Win using the current values in
    --  State, and increment State.Turn_Count.  The footer format is:
    --
-   --    [ctx ... | ^... out | provider/model] fork+PID/UUID/N
+   --    [ctx ... | ^... out | $... turn | $... session | provider/model]
+   --    fork+PID/UUID/N
    --    ════════════════════════════════════════════════════════════
    --
-   --  where the bracketed summary is omitted when no summary parts are
-   --  available.  Used by Dispatch_Pi_Event when get_session_stats returns.
+   --  Cost segments are omitted when zero.  The bracketed summary as a
+   --  whole is omitted when no parts are available.  Used by
+   --  Dispatch_Pi_Event when get_session_stats returns.
    procedure Append_Live_Turn_Footer
      (Win   : in out Acme.Window.Win;
       FS    : not null access Nine_P.Client.Fs;

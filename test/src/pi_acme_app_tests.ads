@@ -79,6 +79,14 @@ package Pi_Acme_App_Tests is
    procedure Test_Stats_Model_Part_When_Set   (T : in out Test);
    procedure Test_Stats_Model_Part_When_Empty (T : in out Test);
 
+   --  App_State cost fields
+   procedure Test_State_Turn_Cost_Initial       (T : in out Test);
+   procedure Test_State_Turn_Cost_Round_Trip    (T : in out Test);
+   procedure Test_State_Session_Stats_Initial   (T : in out Test);
+   procedure Test_State_Session_Stats_Round_Trip (T : in out Test);
+   procedure Test_State_Session_Stats_Reset     (T : in out Test);
+   procedure Test_State_Cost_Independent_Of_Tokens (T : in out Test);
+
    --  JSON_Scalar_Image
    procedure Test_JSON_Scalar_String           (T : in out Test);
    procedure Test_JSON_Scalar_Integer          (T : in out Test);

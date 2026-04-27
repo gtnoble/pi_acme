@@ -242,6 +242,10 @@ package body Test_Suites is
       Result.Add_Test (Acme_Int_Caller.Create
         ("[integration] Live footer: summary and fork share one line",
          Acme_Integration_Tests.Test_Append_Live_Turn_Footer'Access));
+      Result.Add_Test (Acme_Int_Caller.Create
+        ("[integration] Live footer: cost segments appear when non-zero",
+         Acme_Integration_Tests.Test_Append_Live_Turn_Footer_With_Cost
+           'Access));
 
       --  Pi_RPC tests
       Result.Add_Test (Pi_RPC_Caller.Create
@@ -465,6 +469,24 @@ package body Test_Suites is
       Result.Add_Test (App_State_Caller.Create
         ("Stats model part: empty guard when no model set",
          Pi_Acme_App_Tests.Test_Stats_Model_Part_When_Empty'Access));
+      Result.Add_Test (App_State_Caller.Create
+        ("App_State Turn_Cost_Dmil initial value is 0",
+         Pi_Acme_App_Tests.Test_State_Turn_Cost_Initial'Access));
+      Result.Add_Test (App_State_Caller.Create
+        ("App_State Turn_Cost_Dmil round-trip via Set_Turn_Cost",
+         Pi_Acme_App_Tests.Test_State_Turn_Cost_Round_Trip'Access));
+      Result.Add_Test (App_State_Caller.Create
+        ("App_State session stats fields all start at 0",
+         Pi_Acme_App_Tests.Test_State_Session_Stats_Initial'Access));
+      Result.Add_Test (App_State_Caller.Create
+        ("App_State Set_Session_Stats stores all six fields atomically",
+         Pi_Acme_App_Tests.Test_State_Session_Stats_Round_Trip'Access));
+      Result.Add_Test (App_State_Caller.Create
+        ("App_State Set_Session_Stats with zeros resets all fields",
+         Pi_Acme_App_Tests.Test_State_Session_Stats_Reset'Access));
+      Result.Add_Test (App_State_Caller.Create
+        ("App_State cost fields are independent of per-turn token counts",
+         Pi_Acme_App_Tests.Test_State_Cost_Independent_Of_Tokens'Access));
       Result.Add_Test (App_State_Caller.Create
         ("JSON_Scalar_Image: string value returned without quotes",
          Pi_Acme_App_Tests.Test_JSON_Scalar_String'Access));

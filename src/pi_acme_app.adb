@@ -97,6 +97,13 @@ package body Pi_Acme_App is
       function Turn_Input_Tokens  return Natural is (P_Turn_In);
       function Turn_Output_Tokens return Natural is (P_Turn_Out);
       function Turn_Count         return Natural is (P_Turn_Count);
+      function Turn_Cost_Dmil     return Natural is (P_Turn_Cost);
+      function Session_Cost_Dmil  return Natural is (P_Sess_Cost);
+      function Session_Input_Tokens  return Natural is (P_Sess_In);
+      function Session_Output_Tokens return Natural is (P_Sess_Out);
+      function Session_Cache_Read    return Natural is (P_Sess_Cache_R);
+      function Session_Cache_Write   return Natural is (P_Sess_Cache_W);
+      function Session_Total_Tokens  return Natural is (P_Sess_Total);
       function Win_Name           return String  is
         (To_String (P_Win_Name));
 
@@ -165,6 +172,28 @@ package body Pi_Acme_App is
          P_Turn_In  := Input;
          P_Turn_Out := Output;
       end Set_Turn_Tokens;
+
+      procedure Set_Turn_Cost (Dmil : Natural) is
+      begin
+         P_Turn_Cost := Dmil;
+      end Set_Turn_Cost;
+
+      procedure Set_Session_Stats
+        (Cost_Dmil   : Natural;
+         Input       : Natural;
+         Output      : Natural;
+         Cache_Read  : Natural;
+         Cache_Write : Natural;
+         Total       : Natural)
+      is
+      begin
+         P_Sess_Cost    := Cost_Dmil;
+         P_Sess_In      := Input;
+         P_Sess_Out     := Output;
+         P_Sess_Cache_R := Cache_Read;
+         P_Sess_Cache_W := Cache_Write;
+         P_Sess_Total   := Total;
+      end Set_Session_Stats;
 
       procedure Set_Win_Name (Name : String) is
       begin
@@ -268,6 +297,32 @@ package body Pi_Acme_App is
       end if;
       return Natural_Image (N);
    end Format_Kilo;
+
+   --  Format N (units of $0.0001) as "$D.FFFF".
+   --  Examples: 0 -> "$0.0000", 234 -> "$0.0234", 12345 -> "$1.2345".
+   function Format_Cost (Dmil : Natural) return String is
+
+      --  Return N zero-padded to exactly four decimal digit characters.
+      function Pad4 (N : Natural) return String is
+         Buf : String (1 .. 4) := "0000";
+         V   : Natural         := N;
+      begin
+         Buf (4) := Character'Val (Character'Pos ('0') + V mod 10);
+         V       := V / 10;
+         Buf (3) := Character'Val (Character'Pos ('0') + V mod 10);
+         V       := V / 10;
+         Buf (2) := Character'Val (Character'Pos ('0') + V mod 10);
+         V       := V / 10;
+         Buf (1) := Character'Val (Character'Pos ('0') + V mod 10);
+         return Buf;
+      end Pad4;
+
+   begin
+      return "$"
+             & Natural_Image (Dmil / 10_000)
+             & "."
+             & Pad4 (Dmil mod 10_000);
+   end Format_Cost;
 
    --  Return just the stem of an agent path.
    --  E.g. "~/.../foo.agent.md" -> "foo"
@@ -532,6 +587,44 @@ package body Pi_Acme_App is
       return 0;
    end Get_Integer;
 
+   --  Read a JSON cost field (float or integer) and return the value in
+   --  units of $0.0001 ("dmil").  Handles JSON_Float_Type (the normal
+   --  case from pi's cost.total computation) and JSON_Int_Type (zero
+   --  when no pricing is configured).  Returns 0 when the field is absent,
+   --  zero, or negative.
+   function Get_Cost_Dmil
+     (Val   : JSON_Value;
+      Field : UTF8_String) return Natural
+   is
+   begin
+      if not Val.Has_Field (Field) then
+         return 0;
+      end if;
+      declare
+         F : constant JSON_Value := Val.Get (Field);
+      begin
+         if F.Kind = JSON_Float_Type then
+            declare
+               Cost : constant Long_Float := Get_Long_Float (F);
+            begin
+               if Cost > 0.0 then
+                  return Natural
+                    (Long_Float'Floor (Cost * 10_000.0 + 0.5));
+               end if;
+            end;
+         elsif F.Kind = JSON_Int_Type then
+            declare
+               Cost_I : constant Long_Integer := Long_Integer'(F.Get);
+            begin
+               if Cost_I > 0 then
+                  return Natural (Cost_I) * 10_000;
+               end if;
+            end;
+         end if;
+      end;
+      return 0;
+   end Get_Cost_Dmil;
+
    function Get_Boolean
      (Val   : JSON_Value;
       Field : UTF8_String) return Boolean
@@ -676,10 +769,12 @@ package body Pi_Acme_App is
    --  Build the bracketed per-turn summary placed before the fork token.
    --  Returns "" when no summary parts are available.
    function Format_Turn_Summary
-     (Input_Tokens  : Natural;
-      Output_Tokens : Natural;
-      Ctx_Window    : Natural;
-      Model_Text    : String) return String
+     (Input_Tokens      : Natural;
+      Output_Tokens     : Natural;
+      Ctx_Window        : Natural;
+      Model_Text        : String;
+      Turn_Cost_Dmil    : Natural := 0;
+      Session_Cost_Dmil : Natural := 0) return String
    is
       Parts : Unbounded_String;
    begin
@@ -702,6 +797,18 @@ package body Pi_Acme_App is
             "^" & Format_Kilo (Output_Tokens)
             & " out");
       end if;
+      if Turn_Cost_Dmil > 0 then
+         if Length (Parts) > 0 then
+            Append (Parts, " | ");
+         end if;
+         Append (Parts, Format_Cost (Turn_Cost_Dmil) & " turn");
+      end if;
+      if Session_Cost_Dmil > 0 then
+         if Length (Parts) > 0 then
+            Append (Parts, " | ");
+         end if;
+         Append (Parts, Format_Cost (Session_Cost_Dmil) & " session");
+      end if;
       if Model_Text'Length > 0 then
          if Length (Parts) > 0 then
             Append (Parts, " | ");
@@ -718,20 +825,24 @@ package body Pi_Acme_App is
    --  so button-3 opens a forked session.
    --  Format: [summary ]fork+PID/UUID/N\n════...════\n\n
    function Format_Turn_Footer
-     (Turn_N        : Positive;
-      UUID          : String;
-      PID           : String;
-      Input_Tokens  : Natural := 0;
-      Output_Tokens : Natural := 0;
-      Ctx_Window    : Natural := 0;
-      Model_Text    : String  := "") return String
+     (Turn_N            : Positive;
+      UUID              : String;
+      PID               : String;
+      Input_Tokens      : Natural := 0;
+      Output_Tokens     : Natural := 0;
+      Ctx_Window        : Natural := 0;
+      Model_Text        : String  := "";
+      Turn_Cost_Dmil    : Natural := 0;
+      Session_Cost_Dmil : Natural := 0) return String
    is
       Summary : constant String :=
         Format_Turn_Summary
-          (Input_Tokens  => Input_Tokens,
-           Output_Tokens => Output_Tokens,
-           Ctx_Window    => Ctx_Window,
-           Model_Text    => Model_Text);
+          (Input_Tokens      => Input_Tokens,
+           Output_Tokens     => Output_Tokens,
+           Ctx_Window        => Ctx_Window,
+           Model_Text        => Model_Text,
+           Turn_Cost_Dmil    => Turn_Cost_Dmil,
+           Session_Cost_Dmil => Session_Cost_Dmil);
    begin
       return ASCII.LF & ASCII.LF
              & (if Summary'Length > 0 then Summary & " " else "")
@@ -749,26 +860,32 @@ package body Pi_Acme_App is
       State : in out App_State;
       PID   : String)
    is
-      Input_Tokens  : constant Natural :=
+      Input_Tokens      : constant Natural :=
         State.Turn_Input_Tokens;
-      Output_Tokens : constant Natural :=
+      Output_Tokens     : constant Natural :=
         State.Turn_Output_Tokens;
-      Ctx_Window    : constant Natural :=
+      Ctx_Window        : constant Natural :=
         State.Context_Window;
-      Model_Text    : constant String  :=
+      Model_Text        : constant String  :=
         State.Current_Model;
+      Turn_Cost_Dmil    : constant Natural :=
+        State.Turn_Cost_Dmil;
+      Session_Cost_Dmil : constant Natural :=
+        State.Session_Cost_Dmil;
    begin
       State.Increment_Turn_Count;
       Acme.Window.Append
         (Win, FS,
          Format_Turn_Footer
-           (Turn_N        => State.Turn_Count,
-            UUID          => State.Session_Id,
-            PID           => PID,
-            Input_Tokens  => Input_Tokens,
-            Output_Tokens => Output_Tokens,
-            Ctx_Window    => Ctx_Window,
-            Model_Text    => Model_Text));
+           (Turn_N            => State.Turn_Count,
+            UUID              => State.Session_Id,
+            PID               => PID,
+            Input_Tokens      => Input_Tokens,
+            Output_Tokens     => Output_Tokens,
+            Ctx_Window        => Ctx_Window,
+            Model_Text        => Model_Text,
+            Turn_Cost_Dmil    => Turn_Cost_Dmil,
+            Session_Cost_Dmil => Session_Cost_Dmil));
    end Append_Live_Turn_Footer;
 
    --  ── Edit_Diff_Lines ───────────────────────────────────────────────────
@@ -1216,7 +1333,7 @@ package body Pi_Acme_App is
             Section := No_Section;
          end;
 
-      --  ── message_end (token counts) ────────────────────────────────────
+      --  ── message_end (token counts and turn cost) ─────────────────────
       elsif Kind = "message_end" then
          declare
             Msg   : constant JSON_Value := Get_Object (Event, "message");
@@ -1226,15 +1343,24 @@ package body Pi_Acme_App is
               and then Usage.Kind = JSON_Object_Type
             then
                declare
-                  Input_Count : constant Natural :=
+                  Input_Count  : constant Natural :=
                     Get_Integer (Usage, "input")
                     + Get_Integer (Usage, "cacheRead")
                     + Get_Integer (Usage, "cacheWrite");
                   Output_Count : constant Natural :=
                     Get_Integer (Usage, "output");
+                  Cost_Val     : constant JSON_Value :=
+                    Get_Object (Usage, "cost");
+                  Turn_Cost    : constant Natural :=
+                    (if Cost_Val.Kind = JSON_Object_Type
+                     then Get_Cost_Dmil (Cost_Val, "total")
+                     else 0);
                begin
                   if Input_Count > 0 or else Output_Count > 0 then
                      State.Set_Turn_Tokens (Input_Count, Output_Count);
+                  end if;
+                  if Turn_Cost > 0 then
+                     State.Set_Turn_Cost (Turn_Cost);
                   end if;
                end;
             end if;
@@ -1512,11 +1638,43 @@ package body Pi_Acme_App is
 
                elsif Command = "new_session" then
                   State.Set_Turn_Tokens (0, 0);
+                  State.Set_Turn_Cost (0);
+                  State.Set_Session_Stats (0, 0, 0, 0, 0, 0);
                   State.Reset_Turn_Count;
                   State.Set_Is_Retrying (False);
                   Pi_RPC.Send (Proc, "{""type"":""get_state""}");
 
                elsif Command = "get_session_stats" then
+                  --  Store cumulative session stats before building the
+                  --  turn footer so that Session_Cost_Dmil is populated
+                  --  in time for Append_Live_Turn_Footer.
+                  declare
+                     Tokens_Val : constant JSON_Value :=
+                       Get_Object (Data, "tokens");
+                  begin
+                     State.Set_Session_Stats
+                       (Cost_Dmil   => Get_Cost_Dmil (Data, "cost"),
+                        Input       =>
+                          (if Tokens_Val.Kind = JSON_Object_Type
+                           then Get_Integer (Tokens_Val, "input")
+                           else 0),
+                        Output      =>
+                          (if Tokens_Val.Kind = JSON_Object_Type
+                           then Get_Integer (Tokens_Val, "output")
+                           else 0),
+                        Cache_Read  =>
+                          (if Tokens_Val.Kind = JSON_Object_Type
+                           then Get_Integer (Tokens_Val, "cacheRead")
+                           else 0),
+                        Cache_Write =>
+                          (if Tokens_Val.Kind = JSON_Object_Type
+                           then Get_Integer (Tokens_Val, "cacheWrite")
+                           else 0),
+                        Total       =>
+                          (if Tokens_Val.Kind = JSON_Object_Type
+                           then Get_Integer (Tokens_Val, "total")
+                           else 0));
+                  end;
                   if State.Pending_Stats then
                      State.Set_Pending_Stats (False);
                      --  Append turn footer: summary and fork token on the
@@ -2621,9 +2779,11 @@ package body Pi_Acme_App is
                end if;
             end if;
 
-            --  ② Bootstrap phase: send get_state; send set_model on first
-            --  boot only (on a reload the model comes from the session).
+            --  ② Bootstrap phase: send get_state and get_session_stats;
+            --  send set_model on first boot only (on a reload the model
+            --  comes from the session).
             Pi_RPC.Send (Proc, "{""type"":""get_state""}");
+            Pi_RPC.Send (Proc, "{""type"":""get_session_stats""}");
             if First_Boot then
                First_Boot := False;
                if To_String (Opts.Model) /= "" then
@@ -3134,63 +3294,144 @@ package body Pi_Acme_App is
                               end;
                            elsif Text = "Stats" then
                               declare
-                                 Parent        : constant String :=
+                                 Parent    : constant String :=
                                    Ada.Directories.Current_Directory
                                    & "/+pi";
-                                 Input_Tokens  : constant Natural :=
+                                 Turn_In   : constant Natural :=
                                    State.Turn_Input_Tokens;
-                                 Output_Tokens : constant Natural :=
+                                 Turn_Out  : constant Natural :=
                                    State.Turn_Output_Tokens;
-                                 Ctx_Window    : constant Natural :=
+                                 Ctx_Win   : constant Natural :=
                                    State.Context_Window;
-                                 Stats_Buffer  : Unbounded_String;
+                                 Sess_In   : constant Natural :=
+                                   State.Session_Input_Tokens;
+                                 Sess_Out  : constant Natural :=
+                                   State.Session_Output_Tokens;
+                                 Sess_CR   : constant Natural :=
+                                   State.Session_Cache_Read;
+                                 Sess_CW   : constant Natural :=
+                                   State.Session_Cache_Write;
+                                 Sess_Tot  : constant Natural :=
+                                   State.Session_Total_Tokens;
+                                 Sess_Cost : constant Natural :=
+                                   State.Session_Cost_Dmil;
+                                 Buf       : Unbounded_String;
                               begin
                                  Append
-                                   (Stats_Buffer,
-                                    "Session:  " & State.Session_Id
-                                    & ASCII.LF);
-                                 Append
-                                   (Stats_Buffer,
-                                    "Model:    " & State.Current_Model
-                                    & ASCII.LF);
-                                 Append
-                                   (Stats_Buffer,
-                                    "Thinking: "
-                                    & State.Current_Thinking
+                                   (Buf,
+                                    "# Session statistics"
                                     & ASCII.LF & ASCII.LF);
                                  Append
-                                   (Stats_Buffer, "Last turn:" & ASCII.LF);
-                                 if Input_Tokens > 0 then
+                                   (Buf,
+                                    "Session:  "
+                                    & State.Session_Id & ASCII.LF);
+                                 if State.Current_Model'Length > 0 then
                                     Append
-                                      (Stats_Buffer,
-                                       "  Input:   "
-                                       & Natural_Image (Input_Tokens)
+                                      (Buf,
+                                       "Model:    "
+                                       & State.Current_Model);
+                                    if Ctx_Win > 0 then
+                                       Append
+                                         (Buf,
+                                          " ("
+                                          & Format_Kilo (Ctx_Win)
+                                          & " ctx)");
+                                    end if;
+                                    Append (Buf, "" & ASCII.LF);
+                                 end if;
+                                 if State.Current_Thinking'Length > 0 then
+                                    Append
+                                      (Buf,
+                                       "Thinking: "
+                                       & State.Current_Thinking
                                        & ASCII.LF);
                                  end if;
-                                 if Output_Tokens > 0 then
+                                 Append (Buf, "" & ASCII.LF);
+                                 --  Session-level cumulative breakdown.
+                                 if Sess_Tot > 0 then
                                     Append
-                                      (Stats_Buffer,
-                                       "  Output:  "
-                                       & Natural_Image (Output_Tokens)
+                                      (Buf,
+                                       "Tokens this session:" & ASCII.LF);
+                                    Append
+                                      (Buf,
+                                       "  Input:        "
+                                       & Natural_Image (Sess_In)
+                                       & ASCII.LF);
+                                    Append
+                                      (Buf,
+                                       "  Output:       "
+                                       & Natural_Image (Sess_Out)
+                                       & ASCII.LF);
+                                    if Sess_CR > 0 then
+                                       Append
+                                         (Buf,
+                                          "  Cache read:   "
+                                          & Natural_Image (Sess_CR)
+                                          & ASCII.LF);
+                                    end if;
+                                    if Sess_CW > 0 then
+                                       Append
+                                         (Buf,
+                                          "  Cache write:  "
+                                          & Natural_Image (Sess_CW)
+                                          & ASCII.LF);
+                                    end if;
+                                    Append
+                                      (Buf,
+                                       "  Total:        "
+                                       & Natural_Image (Sess_Tot)
+                                       & ASCII.LF);
+                                    if Sess_Cost > 0 then
+                                       Append
+                                         (Buf,
+                                          ASCII.LF & "Cost:     "
+                                          & Format_Cost (Sess_Cost)
+                                          & ASCII.LF);
+                                    end if;
+                                 else
+                                    Append
+                                      (Buf,
+                                       "(No statistics yet"
+                                       & " -- complete a turn first.)"
                                        & ASCII.LF);
                                  end if;
-                                 if Input_Tokens > 0
-                                   and then Ctx_Window > 0
-                                 then
+                                 --  Per-turn data from the most recent turn.
+                                 if Turn_In > 0 or else Turn_Out > 0 then
                                     Append
-                                      (Stats_Buffer,
-                                       "  Context: "
-                                       & Natural_Image (Input_Tokens)
-                                       & "/" & Natural_Image (Ctx_Window)
-                                       & " ("
-                                       & Natural_Image
-                                           (Input_Tokens * 100
-                                            / Ctx_Window)
-                                       & "%)" & ASCII.LF);
+                                      (Buf,
+                                       ASCII.LF & "Last turn:" & ASCII.LF);
+                                    if Turn_In > 0 then
+                                       Append
+                                         (Buf,
+                                          "  Input:   "
+                                          & Natural_Image (Turn_In)
+                                          & ASCII.LF);
+                                    end if;
+                                    if Turn_Out > 0 then
+                                       Append
+                                         (Buf,
+                                          "  Output:  "
+                                          & Natural_Image (Turn_Out)
+                                          & ASCII.LF);
+                                    end if;
+                                    if Turn_In > 0
+                                      and then Ctx_Win > 0
+                                    then
+                                       Append
+                                         (Buf,
+                                          "  Context: "
+                                          & Natural_Image (Turn_In)
+                                          & "/"
+                                          & Natural_Image (Ctx_Win)
+                                          & " ("
+                                          & Natural_Image
+                                              (Turn_In * 100 / Ctx_Win)
+                                          & "%)" & ASCII.LF);
+                                    end if;
                                  end if;
                                  Open_Sub_Window
                                    (My_FS'Access, Parent, "+stats",
-                                    To_String (Stats_Buffer));
+                                    To_String (Buf));
                               end;
                            else
                               Acme.Window.Send_Event

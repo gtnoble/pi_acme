@@ -537,4 +537,80 @@ package body Acme_Integration_Tests is
       end;
    end Test_Append_Live_Turn_Footer;
 
+   --  Verify that non-zero Turn_Cost_Dmil and Session_Cost_Dmil produce
+   --  "$X.XXXX turn" and "$X.XXXX session" segments in the footer body.
+   --  This also exercises Format_Cost and Format_Turn_Summary end-to-end.
+   procedure Test_Append_Live_Turn_Footer_With_Cost (T : in out Test) is
+      pragma Unreferenced (T);
+      Session_Id : constant String :=
+        "ca8add79-7902-415c-af1d-b4b4e93bb12b";
+      PID        : constant String := "36546";
+   begin
+      if not Acme_Running then return; end if;
+      declare
+         FS    : aliased Nine_P.Client.Fs := Ns_Mount ("acme");
+         Win   : Acme.Window.Win          :=
+           Acme.Window.New_Win (FS'Access);
+         State : Pi_Acme_App.App_State;
+         Id    : constant String :=
+           Natural_Image (Acme.Window.Id (Win));
+      begin
+         State.Set_Session_Id (Session_Id);
+         State.Set_Model ("github-copilot/gpt-5.3-codex");
+         State.Set_Context_Window (400_000);
+         State.Set_Turn_Tokens (24_000, 537);
+         --  0.0234 dollars per turn; 0.1560 dollars session total.
+         State.Set_Turn_Cost (234);
+         State.Set_Session_Stats
+           (Cost_Dmil   => 1_560,
+            Input       => 50_000,
+            Output      => 2_000,
+            Cache_Read  => 0,
+            Cache_Write => 0,
+            Total       => 52_000);
+
+         Pi_Acme_App.Append_Live_Turn_Footer
+           (Win   => Win,
+            FS    => FS'Access,
+            State => State,
+            PID   => PID);
+
+         declare
+            Body_Text    : constant String :=
+              Read_Via_9p ("acme/" & Id & "/body");
+            Turn_Seg     : constant String := "$0.0234 turn";
+            Session_Seg  : constant String := "$0.1560 session";
+         begin
+            Assert
+              (Ada.Strings.Fixed.Index (Body_Text, Turn_Seg) > 0,
+               "Footer must contain ""$0.0234 turn"" per-turn cost segment");
+            Assert
+              (Ada.Strings.Fixed.Index (Body_Text, Session_Seg) > 0,
+               "Footer must contain ""$0.1560 session"" cumulative cost "
+               & "segment");
+            --  Both cost segments must appear before the fork token on the
+            --  same summary line.
+            declare
+               Turn_Pos    : constant Natural :=
+                 Ada.Strings.Fixed.Index (Body_Text, Turn_Seg);
+               Session_Pos : constant Natural :=
+                 Ada.Strings.Fixed.Index (Body_Text, Session_Seg);
+               Fork_Pos    : constant Natural :=
+                 Ada.Strings.Fixed.Index
+                   (Body_Text, "fork+" & PID & "/" & Session_Id & "/1");
+            begin
+               Assert (Turn_Pos > 0 and then Session_Pos > 0
+                       and then Fork_Pos > 0,
+                       "All three markers must be present");
+               Assert (Turn_Pos < Fork_Pos,
+                       "Turn cost must precede fork token");
+               Assert (Session_Pos < Fork_Pos,
+                       "Session cost must precede fork token");
+            end;
+         end;
+
+         Acme.Window.Delete (Win, FS'Access);
+      end;
+   end Test_Append_Live_Turn_Footer_With_Cost;
+
 end Acme_Integration_Tests;

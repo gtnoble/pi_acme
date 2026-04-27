@@ -29,6 +29,9 @@ package Acme_Integration_Tests is
    procedure Test_Clear_Body_On_Empty_Body   (T : in out Test);
 
    --  Live end-of-turn footer helper used by get_session_stats responses.
-   procedure Test_Append_Live_Turn_Footer (T : in out Test);
+   procedure Test_Append_Live_Turn_Footer          (T : in out Test);
+   --  Same helper with non-zero cost fields — verifies "$X.XXXX turn" and
+   --  "$X.XXXX session" segments appear in the footer body.
+   procedure Test_Append_Live_Turn_Footer_With_Cost (T : in out Test);
 
 end Acme_Integration_Tests;

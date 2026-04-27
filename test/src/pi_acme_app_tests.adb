@@ -921,6 +921,122 @@ package body Pi_Acme_App_Tests is
          & "guard must be False so no model part is emitted");
    end Test_Stats_Model_Part_When_Empty;
 
+   --  ── App_State cost fields ─────────────────────────────────────────────
+   --
+   --  These tests cover the new per-turn and session-level cost/token fields
+   --  added for cost tracking.  All fields default to 0 and are updated
+   --  atomically via Set_Turn_Cost and Set_Session_Stats.
+
+   --  Turn_Cost_Dmil defaults to 0 on a fresh App_State.
+   procedure Test_State_Turn_Cost_Initial (T : in out Test) is
+      pragma Unreferenced (T);
+      S : App_State;
+   begin
+      Assert (S.Turn_Cost_Dmil = 0,
+              "Turn_Cost_Dmil should be 0 initially");
+   end Test_State_Turn_Cost_Initial;
+
+   --  Set_Turn_Cost stores the given dmil value and can be overwritten.
+   procedure Test_State_Turn_Cost_Round_Trip (T : in out Test) is
+      pragma Unreferenced (T);
+      S : App_State;
+   begin
+      --  0.0234 dollars = 234 dmil
+      S.Set_Turn_Cost (234);
+      Assert (S.Turn_Cost_Dmil = 234,
+              "Turn_Cost_Dmil should store 234 after Set_Turn_Cost(234)");
+      --  Overwrite with a different value.
+      S.Set_Turn_Cost (1_560);
+      Assert (S.Turn_Cost_Dmil = 1_560,
+              "Turn_Cost_Dmil should update to 1560 on second Set_Turn_Cost");
+      --  Reset to zero.
+      S.Set_Turn_Cost (0);
+      Assert (S.Turn_Cost_Dmil = 0,
+              "Turn_Cost_Dmil should return to 0 after Set_Turn_Cost(0)");
+   end Test_State_Turn_Cost_Round_Trip;
+
+   --  All six session-stats fields default to 0.
+   procedure Test_State_Session_Stats_Initial (T : in out Test) is
+      pragma Unreferenced (T);
+      S : App_State;
+   begin
+      Assert (S.Session_Cost_Dmil      = 0, "Session_Cost_Dmil = 0 initially");
+      Assert (S.Session_Input_Tokens   = 0, "Session_Input_Tokens = 0");
+      Assert (S.Session_Output_Tokens  = 0, "Session_Output_Tokens = 0");
+      Assert (S.Session_Cache_Read     = 0, "Session_Cache_Read = 0");
+      Assert (S.Session_Cache_Write    = 0, "Session_Cache_Write = 0");
+      Assert (S.Session_Total_Tokens   = 0, "Session_Total_Tokens = 0");
+   end Test_State_Session_Stats_Initial;
+
+   --  Set_Session_Stats stores all six fields atomically and they can be
+   --  read back independently via their individual accessors.
+   procedure Test_State_Session_Stats_Round_Trip (T : in out Test) is
+      pragma Unreferenced (T);
+      S : App_State;
+   begin
+      S.Set_Session_Stats
+        (Cost_Dmil   => 4_321,
+         Input       => 100_000,
+         Output      => 2_500,
+         Cache_Read  => 80_000,
+         Cache_Write => 5_000,
+         Total       => 187_500);
+      Assert (S.Session_Cost_Dmil     = 4_321,
+              "Session_Cost_Dmil should be 4321");
+      Assert (S.Session_Input_Tokens  = 100_000,
+              "Session_Input_Tokens should be 100000");
+      Assert (S.Session_Output_Tokens = 2_500,
+              "Session_Output_Tokens should be 2500");
+      Assert (S.Session_Cache_Read    = 80_000,
+              "Session_Cache_Read should be 80000");
+      Assert (S.Session_Cache_Write   = 5_000,
+              "Session_Cache_Write should be 5000");
+      Assert (S.Session_Total_Tokens  = 187_500,
+              "Session_Total_Tokens should be 187500");
+   end Test_State_Session_Stats_Round_Trip;
+
+   --  Set_Session_Stats with all-zeros resets every field.
+   procedure Test_State_Session_Stats_Reset (T : in out Test) is
+      pragma Unreferenced (T);
+      S : App_State;
+   begin
+      --  Populate first.
+      S.Set_Session_Stats (1_000, 50_000, 1_000, 40_000, 2_000, 93_000);
+      --  Now reset.
+      S.Set_Session_Stats (0, 0, 0, 0, 0, 0);
+      Assert (S.Session_Cost_Dmil     = 0, "Cost reset to 0");
+      Assert (S.Session_Input_Tokens  = 0, "Input reset to 0");
+      Assert (S.Session_Output_Tokens = 0, "Output reset to 0");
+      Assert (S.Session_Cache_Read    = 0, "Cache_Read reset to 0");
+      Assert (S.Session_Cache_Write   = 0, "Cache_Write reset to 0");
+      Assert (S.Session_Total_Tokens  = 0, "Total reset to 0");
+   end Test_State_Session_Stats_Reset;
+
+   --  Cost fields are entirely independent of the existing per-turn token
+   --  counts: setting one must not disturb the other.
+   procedure Test_State_Cost_Independent_Of_Tokens (T : in out Test) is
+      pragma Unreferenced (T);
+      S : App_State;
+   begin
+      S.Set_Turn_Tokens (12_000, 400);
+      S.Set_Turn_Cost (234);
+      Assert (S.Turn_Input_Tokens  = 12_000,
+              "Turn_Input_Tokens unchanged after Set_Turn_Cost");
+      Assert (S.Turn_Output_Tokens = 400,
+              "Turn_Output_Tokens unchanged after Set_Turn_Cost");
+      Assert (S.Turn_Cost_Dmil     = 234,
+              "Turn_Cost_Dmil set correctly");
+
+      --  Session stats must also be independent of per-turn fields.
+      S.Set_Session_Stats (999, 200_000, 5_000, 0, 0, 205_000);
+      Assert (S.Turn_Input_Tokens  = 12_000,
+              "Turn_Input_Tokens unchanged after Set_Session_Stats");
+      Assert (S.Turn_Cost_Dmil     = 234,
+              "Turn_Cost_Dmil unchanged after Set_Session_Stats");
+      Assert (S.Session_Cost_Dmil  = 999,
+              "Session_Cost_Dmil set independently");
+   end Test_State_Cost_Independent_Of_Tokens;
+
    --  A JSON string value is returned as-is, without surrounding quotes.
    procedure Test_JSON_Scalar_String (T : in out Test) is
       pragma Unreferenced (T);
