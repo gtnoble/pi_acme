@@ -3400,13 +3400,6 @@ package body Pi_Acme_App is
                                     Append
                                       (Buf,
                                        ASCII.LF & "Last turn:" & ASCII.LF);
-                                    if Turn_In > 0 then
-                                       Append
-                                         (Buf,
-                                          "  Input:   "
-                                          & Natural_Image (Turn_In)
-                                          & ASCII.LF);
-                                    end if;
                                     if Turn_Out > 0 then
                                        Append
                                          (Buf,
