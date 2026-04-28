@@ -98,4 +98,7 @@ package Pi_Acme_App_Tests is
    procedure Test_JSON_Scalar_Object           (T : in out Test);
    procedure Test_JSON_Scalar_Array            (T : in out Test);
 
+   procedure Test_One_Shot_Result_Initial          (T : in out Test);
+   procedure Test_One_Shot_Result_First_Write_Wins (T : in out Test);
+
 end Pi_Acme_App_Tests;

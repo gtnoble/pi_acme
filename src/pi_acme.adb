@@ -1,7 +1,13 @@
 --  pi_acme — Acme frontend for the pi coding agent.
 --
 --  Usage: pi_acme [--session UUID] [--model PROVIDER/ID]
---                 [--agent NAME] [--no-tools]
+--                 [--agent NAME] [--no-tools] [--no-session]
+--                 [--prompt TEXT] [--one-shot]
+--
+--  --prompt TEXT  Send TEXT as the first prompt immediately after startup.
+--  --one-shot     Exit automatically after the first complete agent turn,
+--                 printing a JSON result line to stdout.  Intended for use
+--                 by the subagent_window extension.
 --
 --  Project: pi_acme
 --  For revision history, see the project version-control log.
@@ -39,6 +45,17 @@ begin
               To_Unbounded_String (Ada.Command_Line.Argument (I));
          elsif Arg = "--no-tools" then
             Opts.No_Tools := True;
+         elsif Arg = "--no-session" then
+            Opts.No_Session := True;
+         elsif Arg = "--prompt"
+           and then I < Ada.Command_Line.Argument_Count
+         then
+            I := I + 1;
+            Opts.Initial_Prompt :=
+              To_Unbounded_String (Ada.Command_Line.Argument (I));
+         elsif Arg = "--one-shot" then
+            Opts.One_Shot   := True;
+            Opts.No_Session := True;
          else
             Ada.Text_IO.Put_Line
               (Ada.Text_IO.Standard_Error,

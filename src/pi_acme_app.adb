@@ -6,12 +6,14 @@
 with Ada.Command_Line;
 with Ada.Containers.Vectors;
 with Ada.Directories;
+with Ada.Environment_Variables;
 with Ada.Exceptions;
 with Ada.Streams.Stream_IO;
 with Ada.Strings.Fixed;
 with Ada.Strings.Unbounded; use Ada.Strings.Unbounded;
 with Ada.Text_IO;
 with Interfaces;             use Interfaces;
+with GNAT.OS_Lib;
 with GNAT.SHA256;
 with GNATCOLL.JSON;          use GNATCOLL.JSON;
 with GNATCOLL.OS.FS;
@@ -214,6 +216,20 @@ package body Pi_Acme_App is
       begin
          P_Turn_Count := 0;
       end Reset_Turn_Count;
+
+      procedure Set_One_Shot_Result (Json : String) is
+      begin
+         --  First write wins; ignore subsequent calls so that the exception
+         --  handler cannot clobber an already-captured success result.
+         if Length (P_One_Shot_Result) = 0 then
+            P_One_Shot_Result := To_Unbounded_String (Json);
+         end if;
+      end Set_One_Shot_Result;
+
+      function One_Shot_Result return String is
+      begin
+         return To_String (P_One_Shot_Result);
+      end One_Shot_Result;
 
       procedure Signal_Shutdown is
       begin
@@ -2695,10 +2711,61 @@ package body Pi_Acme_App is
 
    procedure Run (Opts : Options) is
 
+      --  Inject PI_ACME_BIN before spawning pi so the subagent extension
+      --  can locate the pi_acme binary.  Locate_Exec_On_Path resolves a
+      --  bare name via PATH; if that fails, fall back to Command_Name as
+      --  invoked (which already contains a path when launched as
+      --  ./bin/pi_acme or /usr/local/bin/pi_acme).
+      function Inject_Pi_Acme_Bin return Boolean is
+         use type GNAT.OS_Lib.String_Access;
+         Ptr : GNAT.OS_Lib.String_Access :=
+           GNAT.OS_Lib.Locate_Exec_On_Path (Ada.Command_Line.Command_Name);
+      begin
+         if Ptr /= null then
+            Ada.Environment_Variables.Set ("PI_ACME_BIN", Ptr.all);
+            GNAT.OS_Lib.Free (Ptr);
+         else
+            Ada.Environment_Variables.Set
+              ("PI_ACME_BIN", Ada.Command_Line.Command_Name);
+         end if;
+         return True;
+      end Inject_Pi_Acme_Bin;
+
+      Env_Injected : constant Boolean := Inject_Pi_Acme_Bin;
+      pragma Unreferenced (Env_Injected);
+
+      --  Derive the bundled extension path: lib/pi_acme/subagent_window.ts
+      --  sits one level above the binary directory.  Silently omitted if the
+      --  file is absent (e.g. a development build before the post-build copy
+      --  has run).
+      function Subagent_Extension_Path return String is
+         Bin_Path : constant String :=
+           Ada.Environment_Variables.Value ("PI_ACME_BIN", "");
+      begin
+         if Bin_Path'Length = 0 then
+            return "";
+         end if;
+         declare
+            Bin_Dir    : constant String :=
+              Ada.Directories.Containing_Directory (Bin_Path);
+            Prefix_Dir : constant String :=
+              Ada.Directories.Containing_Directory (Bin_Dir);
+            Ext_Path   : constant String :=
+              Prefix_Dir & "/lib/pi_acme/subagent_window.ts";
+         begin
+            return (if Ada.Directories.Exists (Ext_Path)
+                    then Ext_Path
+                    else "");
+         end;
+      end Subagent_Extension_Path;
+
       Cwd       : constant String := Ada.Strings.Fixed.Trim
         (Ada.Command_Line.Command_Name, Ada.Strings.Both);  --  placeholder
       Tag_Extra : constant String :=
-        " | Send Stop Steer New Compact Clear Models Sessions Thinking Stats";
+        (if Opts.One_Shot
+         then " | Stop Steer"
+         else " | Send Stop Steer New Compact Clear"
+              & " Models Sessions Thinking Stats");
 
       --  Process ID used to build window-specific selector tokens.
       My_PID : constant String := Natural_Image (Natural (Getpid));
@@ -2710,7 +2777,9 @@ package body Pi_Acme_App is
         (Session_Id    => To_String (Opts.Session_Id),
          Model         => To_String (Opts.Model),
          System_Prompt => To_String (Opts.Agent),
-         No_Tools      => Opts.No_Tools);
+         No_Tools      => Opts.No_Tools,
+         No_Session    => Opts.No_Session,
+         Extension     => Subagent_Extension_Path);
       State  : App_State;
 
       --  ── Inner task declarations ────────────────────────────────────────
@@ -2742,6 +2811,22 @@ package body Pi_Acme_App is
          --  Wait_Restart_Complete, which only happens after its first
          --  stderr EOF (i.e. not during the very first boot).
          Is_Reload    : Boolean                  := False;
+
+         --  ── One-shot tracking (Opts.One_Shot only) ────────────────────
+         --  Prompt_Sent        — True once the --prompt message is sent.
+         --  Was_Streaming      — previous loop iteration's Is_Streaming
+         --                       value; used to detect the agent_end edge.
+         --  Saw_Abort          — latches Was_Aborted from State *before*
+         --                       Dispatch_Pi_Event clears it at agent_end.
+         --  Awaiting_Last_Text — True between sending get_last_assistant_text
+         --                       and receiving its response.
+         --  One_Shot_Done      — True once the result is stored; causes an
+         --                       early exit from Read_Loop.
+         Prompt_Sent        : Boolean := False;
+         Was_Streaming      : Boolean := False;
+         Saw_Abort          : Boolean := False;
+         Awaiting_Last_Text : Boolean := False;
+         One_Shot_Done      : Boolean := False;
       begin
          Restart_Loop : loop
 
@@ -2808,10 +2893,30 @@ package body Pi_Acme_App is
                      end if;
                   end;
                end if;
+
+               --  One-shot: send the initial prompt supplied via --prompt.
+               if Opts.One_Shot
+                 and then Length (Opts.Initial_Prompt) > 0
+               then
+                  declare
+                     Prompt : constant String     :=
+                       To_String (Opts.Initial_Prompt);
+                     Msg    : constant JSON_Value := Create_Object;
+                  begin
+                     Acme.Window.Append
+                       (Win, My_FS'Access,
+                        ASCII.LF & UC_TRI_R & " " & Prompt & ASCII.LF);
+                     Msg.Set_Field ("type",    Create ("prompt"));
+                     Msg.Set_Field ("message", Create (Prompt));
+                     Pi_RPC.Send (Proc, Write (Msg));
+                     Prompt_Sent := True;
+                  end;
+               end if;
             end if;
 
             --  ③ Read phase: dispatch pi JSON events until EOF.
             Read_Loop : loop
+               exit Read_Loop when One_Shot_Done;
                declare
                   Line : constant String := Pi_RPC.Read_Line (Proc);
                begin
@@ -2820,9 +2925,113 @@ package body Pi_Acme_App is
                      Parse_Result : constant Read_Result := Read (Line);
                   begin
                      if Parse_Result.Success then
-                        Dispatch_Pi_Event
-                          (Parse_Result.Value,
-                           Win, My_FS'Access, State, Section, Proc);
+                        declare
+                           Event : constant JSON_Value := Parse_Result.Value;
+                           Kind  : constant String     :=
+                             Get_String (Event, "type");
+                        begin
+                           --  One-shot: intercept the get_last_assistant_text
+                           --  response before it reaches Dispatch_Pi_Event.
+                           if Opts.One_Shot
+                             and then Awaiting_Last_Text
+                             and then Kind = "response"
+                             and then Get_String (Event, "command")
+                                      = "get_last_assistant_text"
+                           then
+                              Awaiting_Last_Text := False;
+                              declare
+                                 Data   : constant JSON_Value :=
+                                   Get_Object (Event, "data");
+                                 Output : constant String :=
+                                   Get_String (Data, "text");
+                                 Result : constant JSON_Value :=
+                                   Create_Object;
+                              begin
+                                 Result.Set_Field
+                                   ("session_id",
+                                    Create (State.Session_Id));
+                                 Result.Set_Field
+                                   ("output", Create (Output));
+                                 State.Set_One_Shot_Result (Write (Result));
+                              end;
+                              State.Signal_Shutdown;
+                              One_Shot_Done := True;
+
+                           --  One-shot: a failed prompt response means pi
+                           --  rejected the turn before emitting agent_start,
+                           --  so agent_end will never arrive (e.g. missing
+                           --  API key).  Let Dispatch_Pi_Event display the
+                           --  ⚠ message as usual, then terminate.
+                           elsif Opts.One_Shot
+                             and then Prompt_Sent
+                             and then Kind = "response"
+                             and then Get_String (Event, "command") = "prompt"
+                             and then not Get_Boolean (Event, "success")
+                           then
+                              Dispatch_Pi_Event
+                                (Event,
+                                 Win, My_FS'Access, State, Section, Proc);
+                              declare
+                                 Err_Json : constant JSON_Value :=
+                                   Create_Object;
+                              begin
+                                 Err_Json.Set_Field
+                                   ("error",
+                                    Create ("prompt failed: "
+                                            & Get_String (Event, "error")));
+                                 State.Set_One_Shot_Result (Write (Err_Json));
+                              end;
+                              State.Signal_Shutdown;
+                              One_Shot_Done := True;
+
+                           else
+                              --  One-shot: latch Was_Aborted before
+                              --  Dispatch_Pi_Event clears it at agent_end.
+                              if Opts.One_Shot
+                                and then Kind = "agent_end"
+                              then
+                                 Saw_Abort := State.Was_Aborted;
+                              end if;
+
+                              Dispatch_Pi_Event
+                                (Event,
+                                 Win, My_FS'Access, State, Section, Proc);
+
+                              --  One-shot: check for the agent_end edge
+                              --  (Was_Streaming=True → Is_Streaming=False).
+                              if Opts.One_Shot and then Prompt_Sent then
+                                 if Was_Streaming
+                                   and then not State.Is_Streaming
+                                 then
+                                    if Saw_Abort then
+                                       State.Set_One_Shot_Result
+                                         ("{""error"":""aborted""}");
+                                       State.Signal_Shutdown;
+                                       One_Shot_Done := True;
+                                    elsif not State.Has_Text_Delta
+                                      and then not State.Is_Retrying
+                                    then
+                                       State.Set_One_Shot_Result
+                                         ("{""error"":"
+                                          & """No response from pi""}");
+                                       State.Signal_Shutdown;
+                                       One_Shot_Done := True;
+                                    elsif State.Has_Text_Delta
+                                      and then not State.Is_Retrying
+                                    then
+                                       --  Successful turn: fetch the text.
+                                       Pi_RPC.Send
+                                         (Proc,
+                                          "{""type"":"
+                                          & """get_last_assistant_text""}");
+                                       Awaiting_Last_Text := True;
+                                    end if;
+                                    Saw_Abort := False;
+                                 end if;
+                                 Was_Streaming := State.Is_Streaming;
+                              end if;
+                           end if;
+                        end;
                      else
                         --  Non-JSON line on pi stdout — show it verbatim so
                         --  plain-text warnings or startup diagnostics are
@@ -2852,9 +3061,28 @@ package body Pi_Acme_App is
                   Is_Reload    := True;
                   --  Restart_Loop continues; render fires next iteration.
                else
-                  --  Normal shutdown or unexpected EOF — unblock
-                  --  Pi_Stderr_Task.
+                  --  Terminate pi (idempotent when it already exited).
+                  --  Closing its pipes lets Pi_Stderr_Task reach EOF on
+                  --  stderr and proceed to Wait_Restart_Complete.
+                  Pi_RPC.Terminate_Process (Proc);
                   State.Signal_Restart_Aborted;
+                  --  Tell the user pi has gone away (visible in the window
+                  --  before Run deletes it).
+                  Acme.Window.Append
+                    (Win, My_FS'Access,
+                     ASCII.LF & UC_WARN & " pi exited unexpectedly."
+                     & ASCII.LF);
+                  --  One-shot: record an error result so the spawning
+                  --  extension receives a meaningful response.
+                  --  Set_One_Shot_Result is a no-op when a result was already
+                  --  stored by the normal agent_end path.
+                  if Opts.One_Shot then
+                     State.Set_One_Shot_Result
+                       ("{""error"":""pi exited without producing output""}");
+                  end if;
+                  --  Wake Run unconditionally — the window is dead regardless
+                  --  of mode.  Matches the exception-handler path above.
+                  State.Signal_Shutdown;
                   exit Restart_Loop;
                end if;
             end;
@@ -2869,6 +3097,13 @@ package body Pi_Acme_App is
             Acme.Window.Append
               (Win, My_FS'Access,
                ASCII.LF & UC_WARN & " Lost connection to pi." & ASCII.LF);
+            --  One-shot: record a failure result so Run always has a JSON
+            --  line to print; Set_One_Shot_Result is a no-op if a result
+            --  was already stored.
+            if Opts.One_Shot then
+               State.Set_One_Shot_Result
+                 ("{""error"":""pi connection lost""}");
+            end if;
             State.Signal_Restart_Aborted;
             State.Signal_Shutdown;
       end Pi_Stdout_Task;
@@ -2917,7 +3152,11 @@ package body Pi_Acme_App is
            Open (My_FS'Access,
                  Acme.Window.Event_Path (Win),
                  O_READ);
-         Parser  : Acme.Raw_Events.Event_Parser;
+         Parser       : Acme.Raw_Events.Event_Parser;
+         --  Set to True when the ATC triggering alternative fires so the
+         --  task can skip Signal_Shutdown (it was already called by the
+         --  task that triggered the shutdown).
+         Got_Shutdown : Boolean := False;
 
          --  Launch  llm-chat-open Token  and wait for it.
          --  On non-zero exit, appends a warning line to the window.
@@ -3124,51 +3363,86 @@ package body Pi_Acme_App is
          end Try_Fork_URI;
 
       begin
-         loop
-            declare
-               Data : constant Byte_Array :=
-                 Read_Once (Ev_File'Access);
-            begin
-               exit when Data'Length = 0;
-               Acme.Raw_Events.Feed (Parser, Data);
-               loop
-                  declare
-                     Ev : Acme.Event_Parser.Event;
-                  begin
-                     exit when not
-                       Acme.Raw_Events.Next_Event (Parser, Ev);
+         Event_Loop : loop
+            --  Wrap each blocking read in an ATC select so that
+            --  Signal_Shutdown (from any task) immediately unblocks this
+            --  task rather than leaving it stuck in a 9P read forever.
+            select
+               State.Wait_Shutdown;
+               Got_Shutdown := True;
+            then abort
+               declare
+                  Data : constant Byte_Array :=
+                    Read_Once (Ev_File'Access);
+               begin
+                  exit Event_Loop when Data'Length = 0;
+                  Acme.Raw_Events.Feed (Parser, Data);
+                  loop
                      declare
-                        C2   : constant Character := Ev.C2;
-                        Text : constant String    :=
-                          Ada.Strings.Fixed.Trim
-                            (To_String (Ev.Text), Ada.Strings.Both);
+                        Ev : Acme.Event_Parser.Event;
                      begin
-                        if C2 in 'X' | 'x' then
-                           if Text = "Send" then
-                              declare
-                                 Sel : constant String :=
-                                   Acme.Window.Selection_Text
-                                     (Win, My_FS'Access);
-                              begin
-                                 if Sel'Length > 0 then
-                                    if State.Is_Streaming
-                                      or else State.Is_Retrying
-                                    then
+                        exit when not
+                          Acme.Raw_Events.Next_Event (Parser, Ev);
+                        declare
+                           C2   : constant Character := Ev.C2;
+                           Text : constant String    :=
+                             Ada.Strings.Fixed.Trim
+                               (To_String (Ev.Text), Ada.Strings.Both);
+                        begin
+                           if C2 in 'X' | 'x' then
+                              if Text = "Send" then
+                                 declare
+                                    Sel : constant String :=
+                                      Acme.Window.Selection_Text
+                                        (Win, My_FS'Access);
+                                 begin
+                                    if Sel'Length > 0 then
+                                       if State.Is_Streaming
+                                         or else State.Is_Retrying
+                                       then
+                                          Acme.Window.Append
+                                            (Win, My_FS'Access,
+                                             ASCII.LF & UC_WARN
+                                             & " Agent is running"
+                                             & (if State.Is_Retrying
+                                                then " (retrying)"
+                                                else "")
+                                             & " -- use Steer to redirect"
+                                             & " or Stop first."
+                                             & ASCII.LF);
+                                       else
+                                          Acme.Window.Append
+                                            (Win, My_FS'Access,
+                                             ASCII.LF & UC_TRI_R
+                                             & " " & Sel & ASCII.LF);
+                                          declare
+                                             Msg : constant JSON_Value :=
+                                               Create_Object;
+                                          begin
+                                             Msg.Set_Field
+                                               ("type", Create ("prompt"));
+                                             Msg.Set_Field
+                                               ("message", Create (Sel));
+                                             Pi_RPC.Send
+                                               (Proc, Write (Msg));
+                                          end;
+                                       end if;
+                                    end if;
+                                 end;
+                              elsif Text = "Stop" then
+                                 Pi_RPC.Send
+                                   (Proc, "{""type"":""abort""}");
+                              elsif Text = "Steer" then
+                                 declare
+                                    Sel : constant String :=
+                                      Acme.Window.Selection_Text
+                                        (Win, My_FS'Access);
+                                 begin
+                                    if Sel'Length > 0 then
                                        Acme.Window.Append
                                          (Win, My_FS'Access,
-                                          ASCII.LF & UC_WARN
-                                          & " Agent is running"
-                                          & (if State.Is_Retrying
-                                             then " (retrying)"
-                                             else "")
-                                          & " -- use Steer to redirect"
-                                          & " or Stop first."
-                                          & ASCII.LF);
-                                    else
-                                       Acme.Window.Append
-                                         (Win, My_FS'Access,
-                                          ASCII.LF & UC_TRI_R
-                                          & " " & Sel & ASCII.LF);
+                                          ASCII.LF & UC_HOOK_L
+                                          & " Steer: " & Sel & ASCII.LF);
                                        declare
                                           Msg : constant JSON_Value :=
                                             Create_Object;
@@ -3177,281 +3451,258 @@ package body Pi_Acme_App is
                                             ("type", Create ("prompt"));
                                           Msg.Set_Field
                                             ("message", Create (Sel));
+                                          Msg.Set_Field
+                                            ("streamingBehavior",
+                                             Create ("steer"));
                                           Pi_RPC.Send
                                             (Proc, Write (Msg));
                                        end;
                                     end if;
-                                 end if;
-                              end;
-                           elsif Text = "Stop" then
-                              Pi_RPC.Send
-                                (Proc, "{""type"":""abort""}");
-                           elsif Text = "Steer" then
-                              declare
-                                 Sel : constant String :=
-                                   Acme.Window.Selection_Text
-                                     (Win, My_FS'Access);
-                              begin
-                                 if Sel'Length > 0 then
-                                    Acme.Window.Append
-                                      (Win, My_FS'Access,
-                                       ASCII.LF & UC_HOOK_L
-                                       & " Steer: " & Sel & ASCII.LF);
-                                    declare
-                                       Msg : constant JSON_Value :=
-                                         Create_Object;
-                                    begin
-                                       Msg.Set_Field
-                                         ("type", Create ("prompt"));
-                                       Msg.Set_Field
-                                         ("message", Create (Sel));
-                                       Msg.Set_Field
-                                         ("streamingBehavior",
-                                          Create ("steer"));
-                                       Pi_RPC.Send
-                                         (Proc, Write (Msg));
-                                    end;
-                                 end if;
-                              end;
-                           elsif Text = "New" then
-                              Pi_RPC.Send
-                                (Proc, "{""type"":""new_session""}");
-                              Acme.Window.Append
-                                (Win, My_FS'Access,
-                                 ASCII.LF
-                                 & UC_HORIZ & UC_HORIZ & " New session "
-                                 & UC_HORIZ & UC_HORIZ & ASCII.LF);
-                           elsif Text = "Compact" then
-                              --  Guard: do not compact while the agent is
-                              --  streaming or a compaction is already running.
-                              if not State.Is_Streaming
-                                and then not State.Is_Compacting
-                              then
-                                 State.Set_Compacting (True);
+                                 end;
+                              elsif Text = "New" then
+                                 Pi_RPC.Send
+                                   (Proc, "{""type"":""new_session""}");
                                  Acme.Window.Append
                                    (Win, My_FS'Access,
-                                    ASCII.LF & UC_GEAR
-                                    & " Compacting context"
-                                    & UC_ELLIP & ASCII.LF);
-                                 Acme.Window.Replace_Line1
+                                    ASCII.LF
+                                    & UC_HORIZ & UC_HORIZ & " New session "
+                                    & UC_HORIZ & UC_HORIZ & ASCII.LF);
+                              elsif Text = "Compact" then
+                                 --  Guard: do not compact while the agent is
+                                 --  streaming or a compaction is
+                                 --  already running.
+                                 if not State.Is_Streaming
+                                   and then not State.Is_Compacting
+                                 then
+                                    State.Set_Compacting (True);
+                                    Acme.Window.Append
+                                      (Win, My_FS'Access,
+                                       ASCII.LF & UC_GEAR
+                                       & " Compacting context"
+                                       & UC_ELLIP & ASCII.LF);
+                                    Acme.Window.Replace_Line1
+                                      (Win, My_FS'Access,
+                                       Format_Status (State, "compacting"));
+                                    Pi_RPC.Send
+                                      (Proc, "{""type"":""compact""}");
+                                 end if;
+                              elsif Text = "Clear" then
+                                 Acme.Window.Replace_Match
+                                   (Win, My_FS'Access, "1,$", "");
+                                 Acme.Window.Append
                                    (Win, My_FS'Access,
-                                    Format_Status (State, "compacting"));
-                                 Pi_RPC.Send
-                                   (Proc, "{""type"":""compact""}");
-                              end if;
-                           elsif Text = "Clear" then
-                              Acme.Window.Replace_Match
-                                (Win, My_FS'Access, "1,$", "");
-                              Acme.Window.Append
-                                (Win, My_FS'Access,
-                                 Format_Status (State, "ready")
-                                 & ASCII.LF);
-                           elsif Text = "Models" then
-                              declare
-                                 Parent  : constant String :=
-                                   Ada.Directories.Current_Directory
-                                   & "/+pi";
-                                 Content : constant String :=
-                                   List_Models;
-                              begin
-                                 Open_Sub_Window
-                                   (My_FS'Access, Parent, "+models",
-                                    (if Content'Length > 0
-                                     then Content
-                                     else "(no models found)" & ASCII.LF));
-                              end;
-                           elsif Text = "Sessions" then
-                              declare
-                                 Parent  : constant String :=
-                                   Ada.Directories.Current_Directory
-                                   & "/+pi";
-                                 Content : constant String :=
-                                   List_Sessions_Text;
-                              begin
-                                 Open_Sub_Window
-                                   (My_FS'Access, Parent, "+sessions",
-                                    (if Content'Length > 0
-                                     then Content
-                                     else "(no sessions found)"
-                                          & ASCII.LF));
-                              end;
-                           elsif Text = "Thinking" then
-                              declare
-                                 Parent  : constant String :=
-                                   Ada.Directories.Current_Directory
-                                   & "/+pi";
-                                 Content : constant String :=
-                                   "thinking+" & My_PID
-                                   & "/low"    & ASCII.LF
-                                   & "thinking+" & My_PID
-                                   & "/medium" & ASCII.LF
-                                   & "thinking+" & My_PID
-                                   & "/high"   & ASCII.LF;
-                              begin
-                                 Open_Sub_Window
-                                   (My_FS'Access, Parent,
-                                    "+thinking", Content);
-                              end;
-                           elsif Text = "Stats" then
-                              declare
-                                 Parent    : constant String :=
-                                   Ada.Directories.Current_Directory
-                                   & "/+pi";
-                                 Turn_In   : constant Natural :=
-                                   State.Turn_Input_Tokens;
-                                 Turn_Out  : constant Natural :=
-                                   State.Turn_Output_Tokens;
-                                 Ctx_Win   : constant Natural :=
-                                   State.Context_Window;
-                                 Sess_In   : constant Natural :=
-                                   State.Session_Input_Tokens;
-                                 Sess_Out  : constant Natural :=
-                                   State.Session_Output_Tokens;
-                                 Sess_CR   : constant Natural :=
-                                   State.Session_Cache_Read;
-                                 Sess_CW   : constant Natural :=
-                                   State.Session_Cache_Write;
-                                 Sess_Tot  : constant Natural :=
-                                   State.Session_Total_Tokens;
-                                 Sess_Cost : constant Natural :=
-                                   State.Session_Cost_Dmil;
-                                 Buf       : Unbounded_String;
-                              begin
-                                 Append
-                                   (Buf,
-                                    "# Session statistics"
-                                    & ASCII.LF & ASCII.LF);
-                                 Append
-                                   (Buf,
-                                    "Session:  "
-                                    & State.Session_Id & ASCII.LF);
-                                 if State.Current_Model'Length > 0 then
+                                    Format_Status (State, "ready")
+                                    & ASCII.LF);
+                              elsif Text = "Models" then
+                                 declare
+                                    Parent  : constant String :=
+                                      Ada.Directories.Current_Directory
+                                      & "/+pi";
+                                    Content : constant String :=
+                                      List_Models;
+                                 begin
+                                    Open_Sub_Window
+                                      (My_FS'Access, Parent, "+models",
+                                       (if Content'Length > 0
+                                        then Content
+                                        else "(no models found)" & ASCII.LF));
+                                 end;
+                              elsif Text = "Sessions" then
+                                 declare
+                                    Parent  : constant String :=
+                                      Ada.Directories.Current_Directory
+                                      & "/+pi";
+                                    Content : constant String :=
+                                      List_Sessions_Text;
+                                 begin
+                                    Open_Sub_Window
+                                      (My_FS'Access, Parent, "+sessions",
+                                       (if Content'Length > 0
+                                        then Content
+                                        else "(no sessions found)"
+                                             & ASCII.LF));
+                                 end;
+                              elsif Text = "Thinking" then
+                                 declare
+                                    Parent  : constant String :=
+                                      Ada.Directories.Current_Directory
+                                      & "/+pi";
+                                    Content : constant String :=
+                                      "thinking+" & My_PID
+                                      & "/low"    & ASCII.LF
+                                      & "thinking+" & My_PID
+                                      & "/medium" & ASCII.LF
+                                      & "thinking+" & My_PID
+                                      & "/high"   & ASCII.LF;
+                                 begin
+                                    Open_Sub_Window
+                                      (My_FS'Access, Parent,
+                                       "+thinking", Content);
+                                 end;
+                              elsif Text = "Stats" then
+                                 declare
+                                    Parent    : constant String :=
+                                      Ada.Directories.Current_Directory
+                                      & "/+pi";
+                                    Turn_In   : constant Natural :=
+                                      State.Turn_Input_Tokens;
+                                    Turn_Out  : constant Natural :=
+                                      State.Turn_Output_Tokens;
+                                    Ctx_Win   : constant Natural :=
+                                      State.Context_Window;
+                                    Sess_In   : constant Natural :=
+                                      State.Session_Input_Tokens;
+                                    Sess_Out  : constant Natural :=
+                                      State.Session_Output_Tokens;
+                                    Sess_CR   : constant Natural :=
+                                      State.Session_Cache_Read;
+                                    Sess_CW   : constant Natural :=
+                                      State.Session_Cache_Write;
+                                    Sess_Tot  : constant Natural :=
+                                      State.Session_Total_Tokens;
+                                    Sess_Cost : constant Natural :=
+                                      State.Session_Cost_Dmil;
+                                    Buf       : Unbounded_String;
+                                 begin
                                     Append
                                       (Buf,
-                                       "Model:    "
-                                       & State.Current_Model);
-                                    if Ctx_Win > 0 then
+                                       "# Session statistics"
+                                       & ASCII.LF & ASCII.LF);
+                                    Append
+                                      (Buf,
+                                       "Session:  "
+                                       & State.Session_Id & ASCII.LF);
+                                    if State.Current_Model'Length > 0 then
                                        Append
                                          (Buf,
-                                          " ("
-                                          & Format_Kilo (Ctx_Win)
-                                          & " ctx)");
+                                          "Model:    "
+                                          & State.Current_Model);
+                                       if Ctx_Win > 0 then
+                                          Append
+                                            (Buf,
+                                             " ("
+                                             & Format_Kilo (Ctx_Win)
+                                             & " ctx)");
+                                       end if;
+                                       Append (Buf, "" & ASCII.LF);
+                                    end if;
+                                    if State.Current_Thinking'Length > 0 then
+                                       Append
+                                         (Buf,
+                                          "Thinking: "
+                                          & State.Current_Thinking
+                                          & ASCII.LF);
                                     end if;
                                     Append (Buf, "" & ASCII.LF);
-                                 end if;
-                                 if State.Current_Thinking'Length > 0 then
-                                    Append
-                                      (Buf,
-                                       "Thinking: "
-                                       & State.Current_Thinking
-                                       & ASCII.LF);
-                                 end if;
-                                 Append (Buf, "" & ASCII.LF);
-                                 --  Session-level cumulative breakdown.
-                                 if Sess_Tot > 0 then
-                                    Append
-                                      (Buf,
-                                       "Tokens this session:" & ASCII.LF);
-                                    Append
-                                      (Buf,
-                                       "  Input:        "
-                                       & Natural_Image (Sess_In)
-                                       & ASCII.LF);
-                                    Append
-                                      (Buf,
-                                       "  Output:       "
-                                       & Natural_Image (Sess_Out)
-                                       & ASCII.LF);
-                                    if Sess_CR > 0 then
+                                    --  Session-level cumulative breakdown.
+                                    if Sess_Tot > 0 then
                                        Append
                                          (Buf,
-                                          "  Cache read:   "
-                                          & Natural_Image (Sess_CR)
+                                          "Tokens this session:" & ASCII.LF);
+                                       Append
+                                         (Buf,
+                                          "  Input:        "
+                                          & Natural_Image (Sess_In)
+                                          & ASCII.LF);
+                                       Append
+                                         (Buf,
+                                          "  Output:       "
+                                          & Natural_Image (Sess_Out)
+                                          & ASCII.LF);
+                                       if Sess_CR > 0 then
+                                          Append
+                                            (Buf,
+                                             "  Cache read:   "
+                                             & Natural_Image (Sess_CR)
+                                             & ASCII.LF);
+                                       end if;
+                                       if Sess_CW > 0 then
+                                          Append
+                                            (Buf,
+                                             "  Cache write:  "
+                                             & Natural_Image (Sess_CW)
+                                             & ASCII.LF);
+                                       end if;
+                                       Append
+                                         (Buf,
+                                          "  Total:        "
+                                          & Natural_Image (Sess_Tot)
+                                          & ASCII.LF);
+                                       if Sess_Cost > 0 then
+                                          Append
+                                            (Buf,
+                                             ASCII.LF & "Cost:     "
+                                             & Format_Cost (Sess_Cost)
+                                             & ASCII.LF);
+                                       end if;
+                                    else
+                                       Append
+                                         (Buf,
+                                          "(No statistics yet"
+                                          & " -- complete a turn first.)"
                                           & ASCII.LF);
                                     end if;
-                                    if Sess_CW > 0 then
+                                    --  Per-turn data from the most
+                                    --  recent turn.
+                                    if Turn_In > 0 or else Turn_Out > 0 then
                                        Append
                                          (Buf,
-                                          "  Cache write:  "
-                                          & Natural_Image (Sess_CW)
-                                          & ASCII.LF);
+                                          ASCII.LF & "Last turn:" & ASCII.LF);
+                                       if Turn_Out > 0 then
+                                          Append
+                                            (Buf,
+                                             "  Output:  "
+                                             & Natural_Image (Turn_Out)
+                                             & ASCII.LF);
+                                       end if;
+                                       if Turn_In > 0
+                                         and then Ctx_Win > 0
+                                       then
+                                          Append
+                                            (Buf,
+                                             "  Context: "
+                                             & Natural_Image (Turn_In)
+                                             & "/"
+                                             & Natural_Image (Ctx_Win)
+                                             & " ("
+                                             & Natural_Image
+                                                 (Turn_In * 100 / Ctx_Win)
+                                             & "%)" & ASCII.LF);
+                                       end if;
                                     end if;
-                                    Append
-                                      (Buf,
-                                       "  Total:        "
-                                       & Natural_Image (Sess_Tot)
-                                       & ASCII.LF);
-                                    if Sess_Cost > 0 then
-                                       Append
-                                         (Buf,
-                                          ASCII.LF & "Cost:     "
-                                          & Format_Cost (Sess_Cost)
-                                          & ASCII.LF);
-                                    end if;
-                                 else
-                                    Append
-                                      (Buf,
-                                       "(No statistics yet"
-                                       & " -- complete a turn first.)"
-                                       & ASCII.LF);
-                                 end if;
-                                 --  Per-turn data from the most recent turn.
-                                 if Turn_In > 0 or else Turn_Out > 0 then
-                                    Append
-                                      (Buf,
-                                       ASCII.LF & "Last turn:" & ASCII.LF);
-                                    if Turn_Out > 0 then
-                                       Append
-                                         (Buf,
-                                          "  Output:  "
-                                          & Natural_Image (Turn_Out)
-                                          & ASCII.LF);
-                                    end if;
-                                    if Turn_In > 0
-                                      and then Ctx_Win > 0
-                                    then
-                                       Append
-                                         (Buf,
-                                          "  Context: "
-                                          & Natural_Image (Turn_In)
-                                          & "/"
-                                          & Natural_Image (Ctx_Win)
-                                          & " ("
-                                          & Natural_Image
-                                              (Turn_In * 100 / Ctx_Win)
-                                          & "%)" & ASCII.LF);
-                                    end if;
-                                 end if;
-                                 Open_Sub_Window
-                                   (My_FS'Access, Parent, "+stats",
-                                    To_String (Buf));
-                              end;
-                           else
-                              Acme.Window.Send_Event
-                                (Win, My_FS'Access,
-                                 Ev.C1, Ev.C2, Ev.Q0, Ev.Q1);
+                                    Open_Sub_Window
+                                      (My_FS'Access, Parent, "+stats",
+                                       To_String (Buf));
+                                 end;
+                              else
+                                 Acme.Window.Send_Event
+                                   (Win, My_FS'Access,
+                                    Ev.C1, Ev.C2, Ev.Q0, Ev.Q1);
+                              end if;
+                           elsif C2 in 'L' | 'l' then
+                              --  Try to find a llm-chat+.../tool/... URI near
+                              --  the click before falling back to the plumber.
+                              --  acme's expand() stops at punctuation, so many
+                              --  click positions on the URI send no event at
+                              --  all or send a truncated token; we work around
+                              --  this by reading a small context window and
+                              --  scanning for the pattern ourselves.
+                              if not Try_Fork_URI (Ev)
+                                and then not Try_Open_Tool_URI (Ev)
+                              then
+                                 Acme.Window.Send_Event
+                                   (Win, My_FS'Access,
+                                    Ev.C1, Ev.C2, Ev.Q0, Ev.Q1);
+                              end if;
                            end if;
-                        elsif C2 in 'L' | 'l' then
-                           --  Try to find a llm-chat+.../tool/... URI near
-                           --  the click before falling back to the plumber.
-                           --  acme's expand() stops at punctuation, so many
-                           --  click positions on the URI send no event at
-                           --  all or send a truncated token; we work around
-                           --  this by reading a small context window and
-                           --  scanning for the pattern ourselves.
-                           if not Try_Fork_URI (Ev)
-                             and then not Try_Open_Tool_URI (Ev)
-                           then
-                              Acme.Window.Send_Event
-                                (Win, My_FS'Access,
-                                 Ev.C1, Ev.C2, Ev.Q0, Ev.Q1);
-                           end if;
-                        end if;
+                        end;
                      end;
-                  end;
-               end loop;
-            end;
-         end loop;
+                  end loop;
+               end;
+            end select;
+            exit Event_Loop when Got_Shutdown;
+         end loop Event_Loop;
+         --  Normal exit: window closed or EOF.  Signal the main task.
          State.Signal_Shutdown;
       exception
          when Ex : Nine_P.Proto.P9_Error =>
@@ -3476,72 +3727,81 @@ package body Pi_Acme_App is
       --  ── Plumb_Model_Task ──────────────────────────────────────────────
 
       task body Plumb_Model_Task is
-         Pl_FS  : aliased Nine_P.Client.Fs   := Ns_Mount ("plumb");
-         My_FS  : aliased Nine_P.Client.Fs   := Ns_Mount ("acme");
-         Port   : aliased Nine_P.Client.File :=
+         Pl_FS        : aliased Nine_P.Client.Fs   := Ns_Mount ("plumb");
+         My_FS        : aliased Nine_P.Client.Fs   := Ns_Mount ("acme");
+         Port         : aliased Nine_P.Client.File :=
            Open (Pl_FS'Access, "/pi-model", O_READ);
+         Got_Shutdown : Boolean := False;
       begin
-         loop
-            declare
-               Raw  : constant Byte_Array :=
-                 Nine_P.Client.Read_Once (Port'Access);
-               Data : constant String := Extract_Plumb_Data (Raw);
-            begin
-               exit when Raw'Length = 0;
-               --  Token format: model+PID/PROVIDER/MODELID
-               --  Only handle messages destined for this process.
-               if Data'Length > 0 then
-                  declare
-                     First_Slash : Natural := 0;
-                  begin
-                     for I in Data'Range loop
-                        if Data (I) = '/' then
-                           First_Slash := I;
-                           exit;
-                        end if;
-                     end loop;
-                     if First_Slash > 0
-                       and then Data (Data'First .. First_Slash - 1)
-                                = "model+" & My_PID
-                     then
-                        --  Rest is PROVIDER/MODELID — split on next '/'.
-                        declare
-                           Rest         : constant String :=
-                             Data (First_Slash + 1 .. Data'Last);
-                           Second_Slash : Natural := 0;
-                        begin
-                           for I in Rest'Range loop
-                              if Rest (I) = '/' then
-                                 Second_Slash := I;
-                                 exit;
-                              end if;
-                           end loop;
-                           if Second_Slash > 0 then
-                              declare
-                                 Provider : constant String :=
-                                   Rest (Rest'First .. Second_Slash - 1);
-                                 Model_Id : constant String :=
-                                   Rest (Second_Slash + 1 .. Rest'Last);
-                              begin
-                                 Pi_RPC.Send
-                                   (Proc,
-                                    "{""type"":""set_model"","
-                                    & """provider"":"""
-                                    & Provider & ""","
-                                    & """modelId"":"""
-                                    & Model_Id & """}");
-                                 Acme.Window.Append
-                                   (Win, My_FS'Access,
-                                    ASCII.LF & "[Model -> " & Rest & "]"
-                                    & ASCII.LF);
-                              end;
+         Plumb_Loop : loop
+            select
+               State.Wait_Shutdown;
+               Got_Shutdown := True;
+            then abort
+               declare
+                  Raw  : constant Byte_Array :=
+                    Nine_P.Client.Read_Once (Port'Access);
+                  Data : constant String := Extract_Plumb_Data (Raw);
+               begin
+                  exit Plumb_Loop when Raw'Length = 0;
+                  --  Token format: model+PID/PROVIDER/MODELID
+                  --  Only handle messages destined for this process.
+                  if Data'Length > 0 then
+                     declare
+                        First_Slash : Natural := 0;
+                     begin
+                        for I in Data'Range loop
+                           if Data (I) = '/' then
+                              First_Slash := I;
+                              exit;
                            end if;
-                        end;
-                     end if;
-                  end;
-               end if;
-            end;
-         end loop;
+                        end loop;
+                        if First_Slash > 0
+                          and then Data (Data'First .. First_Slash - 1)
+                                   = "model+" & My_PID
+                        then
+                           --  Rest is PROVIDER/MODELID — split on next '/'.
+                           declare
+                              Rest         : constant String :=
+                                Data (First_Slash + 1 .. Data'Last);
+                              Second_Slash : Natural := 0;
+                           begin
+                              for I in Rest'Range loop
+                                 if Rest (I) = '/' then
+                                    Second_Slash := I;
+                                    exit;
+                                 end if;
+                              end loop;
+                              if Second_Slash > 0 then
+                                 declare
+                                    Provider : constant String :=
+                                      Rest (Rest'First
+                                            .. Second_Slash - 1);
+                                    Model_Id : constant String :=
+                                      Rest (Second_Slash + 1
+                                            .. Rest'Last);
+                                 begin
+                                    Pi_RPC.Send
+                                      (Proc,
+                                       "{""type"":""set_model"","
+                                       & """provider"":"""
+                                       & Provider & ""","
+                                       & """modelId"":"""
+                                       & Model_Id & """}");
+                                    Acme.Window.Append
+                                      (Win, My_FS'Access,
+                                       ASCII.LF & "[Model -> " & Rest
+                                       & "]" & ASCII.LF);
+                                 end;
+                              end if;
+                           end;
+                        end if;
+                     end;
+                  end if;
+               end;
+            end select;
+            exit Plumb_Loop when Got_Shutdown;
+         end loop Plumb_Loop;
       exception
          when Ex : others =>
             Ada.Text_IO.Put_Line
@@ -3559,34 +3819,42 @@ package body Pi_Acme_App is
       --  silently ignored.
 
       task body Plumb_Session_Task is
-         Pl_FS      : aliased Nine_P.Client.Fs   := Ns_Mount ("plumb");
-         Pid_Prefix : constant String             :=
+         Pl_FS        : aliased Nine_P.Client.Fs   := Ns_Mount ("plumb");
+         Pid_Prefix   : constant String             :=
            "llm-chat+" & My_PID & "/";
-         Port       : aliased Nine_P.Client.File :=
+         Port         : aliased Nine_P.Client.File :=
            Open (Pl_FS'Access, "/pi-session", O_READ);
+         Got_Shutdown : Boolean := False;
       begin
-         loop
-            declare
-               Raw  : constant Byte_Array :=
-                 Nine_P.Client.Read_Once (Port'Access);
-               Data : constant String := Extract_Plumb_Data (Raw);
-            begin
-               exit when Raw'Length = 0;
-               if Data'Length > 0 then
-                  declare
-                     UUID : constant String :=
-                       Parse_Session_Token (Data, Pid_Prefix);
-                  begin
-                     if UUID'Length > 0 then
-                        --  Signal reload and terminate pi; Pi_Stdout_Task
-                        --  will call Pi_RPC.Restart once it gets EOF.
-                        State.Request_Reload (UUID);
-                        Pi_RPC.Terminate_Process (Proc);
-                     end if;
-                  end;
-               end if;
-            end;
-         end loop;
+         Plumb_Loop : loop
+            select
+               State.Wait_Shutdown;
+               Got_Shutdown := True;
+            then abort
+               declare
+                  Raw  : constant Byte_Array :=
+                    Nine_P.Client.Read_Once (Port'Access);
+                  Data : constant String := Extract_Plumb_Data (Raw);
+               begin
+                  exit Plumb_Loop when Raw'Length = 0;
+                  if Data'Length > 0 then
+                     declare
+                        UUID : constant String :=
+                          Parse_Session_Token (Data, Pid_Prefix);
+                     begin
+                        if UUID'Length > 0 then
+                           --  Signal reload and terminate pi;
+                           --  Pi_Stdout_Task will call Pi_RPC.Restart
+                           --  once it gets EOF.
+                           State.Request_Reload (UUID);
+                           Pi_RPC.Terminate_Process (Proc);
+                        end if;
+                     end;
+                  end if;
+               end;
+            end select;
+            exit Plumb_Loop when Got_Shutdown;
+         end loop Plumb_Loop;
       exception
          when Ex : others =>
             Ada.Text_IO.Put_Line
@@ -3598,68 +3866,75 @@ package body Pi_Acme_App is
       --  ── Plumb_Thinking_Task ───────────────────────────────────────────
 
       task body Plumb_Thinking_Task is
-         Pl_FS : aliased Nine_P.Client.Fs   := Ns_Mount ("plumb");
-         My_FS : aliased Nine_P.Client.Fs   := Ns_Mount ("acme");
-         Port  : aliased Nine_P.Client.File :=
+         Pl_FS        : aliased Nine_P.Client.Fs   := Ns_Mount ("plumb");
+         My_FS        : aliased Nine_P.Client.Fs   := Ns_Mount ("acme");
+         Port         : aliased Nine_P.Client.File :=
            Open (Pl_FS'Access, "/pi-thinking", O_READ);
+         Got_Shutdown : Boolean := False;
       begin
-         loop
-            declare
-               Raw   : constant Byte_Array :=
-                 Nine_P.Client.Read_Once (Port'Access);
-               Level : constant String := Extract_Plumb_Data (Raw);
-            begin
-               exit when Raw'Length = 0;
-               if Level'Length > 0 then
-                  --  Token format: "thinking+PID/level"
-                  --  Find the last '/' to split PID from level.
-                  declare
-                     Slash : Natural := 0;
-                  begin
-                     for I in reverse Level'Range loop
-                        if Level (I) = '/' then
-                           Slash := I;
-                           exit;
-                        end if;
-                     end loop;
+         Plumb_Loop : loop
+            select
+               State.Wait_Shutdown;
+               Got_Shutdown := True;
+            then abort
+               declare
+                  Raw   : constant Byte_Array :=
+                    Nine_P.Client.Read_Once (Port'Access);
+                  Level : constant String := Extract_Plumb_Data (Raw);
+               begin
+                  exit Plumb_Loop when Raw'Length = 0;
+                  if Level'Length > 0 then
+                     --  Token format: "thinking+PID/level"
+                     --  Find the last '/' to split PID from level.
                      declare
-                        Plus_Pos  : Natural := 0;
-                        Token_PID : Unbounded_String;
+                        Slash : Natural := 0;
                      begin
-                        for I in Level'Range loop
-                           if Level (I) = '+' then
-                              Plus_Pos := I;
+                        for I in reverse Level'Range loop
+                           if Level (I) = '/' then
+                              Slash := I;
                               exit;
                            end if;
                         end loop;
-                        if Plus_Pos > 0 and then Slash > Plus_Pos then
-                           Token_PID :=
-                             To_Unbounded_String
-                               (Level (Plus_Pos + 1 .. Slash - 1));
-                        end if;
-                        if To_String (Token_PID) = My_PID then
-                           declare
-                              Parsed : constant String :=
-                                (if Slash > 0
-                                 then Level (Slash + 1 .. Level'Last)
-                                 else Level);
-                           begin
-                              State.Set_Thinking (Parsed);
-                              Pi_RPC.Send
-                                (Proc,
-                                 "{""type"":""set_thinking_level"","
-                                 & """level"":""" & Parsed & """}");
-                              Acme.Window.Append
-                                (Win, My_FS'Access,
-                                 ASCII.LF & "[Thinking -> "
-                                 & Parsed & "]" & ASCII.LF);
-                           end;
-                        end if;
+                        declare
+                           Plus_Pos  : Natural := 0;
+                           Token_PID : Unbounded_String;
+                        begin
+                           for I in Level'Range loop
+                              if Level (I) = '+' then
+                                 Plus_Pos := I;
+                                 exit;
+                              end if;
+                           end loop;
+                           if Plus_Pos > 0 and then Slash > Plus_Pos then
+                              Token_PID :=
+                                To_Unbounded_String
+                                  (Level (Plus_Pos + 1 .. Slash - 1));
+                           end if;
+                           if To_String (Token_PID) = My_PID then
+                              declare
+                                 Parsed : constant String :=
+                                   (if Slash > 0
+                                    then Level (Slash + 1 .. Level'Last)
+                                    else Level);
+                              begin
+                                 State.Set_Thinking (Parsed);
+                                 Pi_RPC.Send
+                                   (Proc,
+                                    "{""type"":""set_thinking_level"","
+                                    & """level"":""" & Parsed & """}");
+                                 Acme.Window.Append
+                                   (Win, My_FS'Access,
+                                    ASCII.LF & "[Thinking -> "
+                                    & Parsed & "]" & ASCII.LF);
+                              end;
+                           end if;
+                        end;
                      end;
-                  end;
-               end if;
-            end;
-         end loop;
+                  end if;
+               end;
+            end select;
+            exit Plumb_Loop when Got_Shutdown;
+         end loop Plumb_Loop;
       exception
          when Ex : others =>
             Ada.Text_IO.Put_Line
@@ -3683,6 +3958,29 @@ package body Pi_Acme_App is
 
       --  ── Wait for window-closed shutdown ───────────────────────────────
       State.Wait_Shutdown;
+
+      --  ── One-shot teardown ─────────────────────────────────────────────
+      --  Print the JSON result line for the spawning extension to read.
+      --  If no result was stored (e.g. the user closed the window
+      --  manually), emit a generic error object.
+      if Opts.One_Shot then
+         declare
+            Json : constant String := State.One_Shot_Result;
+         begin
+            Ada.Text_IO.Put_Line
+              (if Json'Length > 0
+               then Json
+               else "{""error"":""subagent closed before producing output""}");
+         end;
+      end if;
+
+      --  Close the acme window on every exit path.  Silently ignore errors:
+      --  the window is already gone when the user closed it manually.
+      begin
+         Acme.Window.Ctl (Win, Win_FS'Access, "delete");
+      exception
+         when others => null;  --  window may already be gone
+      end;
    end Run;
 
 end Pi_Acme_App;

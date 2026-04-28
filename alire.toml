@@ -11,3 +11,8 @@ tags = []
 
 [[depends-on]]
 gnatcoll = "^25.0.0"
+
+[[actions]]
+type = "post-build"
+command = ["sh", "-c",
+           "mkdir -p lib/pi_acme && cp extensions/subagent_window.ts lib/pi_acme/subagent_window.ts"]

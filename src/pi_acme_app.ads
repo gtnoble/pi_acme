@@ -105,6 +105,15 @@ package Pi_Acme_App is
       procedure Signal_Restart_Aborted;
       entry     Wait_Restart_Complete (Was_Restarted : out Boolean);
 
+      --  One-shot result: set once by Pi_Stdout_Task before signalling
+      --  shutdown; read by Run after Wait_Shutdown returns.  Only the
+      --  first call to Set_One_Shot_Result has effect (subsequent calls
+      --  are silently ignored), so the exception handler can call it
+      --  safely without overwriting an already-captured success result.
+      --  Returns "" until a result has been stored.
+      procedure Set_One_Shot_Result (Json : String);
+      function  One_Shot_Result     return String;
+
       --  Shutdown synchronisation
       procedure Signal_Shutdown;
       entry     Wait_Shutdown;
@@ -141,15 +150,24 @@ package Pi_Acme_App is
       P_Reload_Requested : Boolean := False;
       P_Restart_Complete : Boolean := False;
       P_Restart_Was_Done : Boolean := False;
+      --  One-shot result (empty until set)
+      P_One_Shot_Result  : Ada.Strings.Unbounded.Unbounded_String;
    end App_State;
 
    --  ── Options ──────────────────────────────────────────────────────────
 
    type Options is record
-      Session_Id : Ada.Strings.Unbounded.Unbounded_String;
-      Model      : Ada.Strings.Unbounded.Unbounded_String;
-      Agent      : Ada.Strings.Unbounded.Unbounded_String;
-      No_Tools   : Boolean := False;
+      Session_Id     : Ada.Strings.Unbounded.Unbounded_String;
+      Model          : Ada.Strings.Unbounded.Unbounded_String;
+      Agent          : Ada.Strings.Unbounded.Unbounded_String;
+      No_Tools       : Boolean := False;
+      No_Session     : Boolean := False;
+      --  When non-empty, sent as the first prompt immediately after the
+      --  bootstrap get_state exchange.  Only meaningful with One_Shot.
+      Initial_Prompt : Ada.Strings.Unbounded.Unbounded_String;
+      --  When True, the window closes and the process exits after the first
+      --  complete agent turn, printing a JSON result line to stdout.
+      One_Shot       : Boolean := False;
    end record;
 
    --  ── Entry point ──────────────────────────────────────────────────────

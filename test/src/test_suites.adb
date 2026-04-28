@@ -12,6 +12,7 @@ with Session_Lister_Tests;
 with Pi_Acme_App_Tests;
 with Session_History_Tests;
 with Tool_URI_Tests;
+with Subagent_Integration_Tests;
 
 package body Test_Suites is
 
@@ -41,6 +42,8 @@ package body Test_Suites is
      new AUnit.Test_Caller (Session_History_Tests.Test);
    package Tool_URI_Caller is
      new AUnit.Test_Caller (Tool_URI_Tests.Test);
+   package Subagent_Int_Caller is
+     new AUnit.Test_Caller (Subagent_Integration_Tests.Test);
 
    function Suite return AUnit.Test_Suites.Access_Test_Suite is
       Result : constant AUnit.Test_Suites.Access_Test_Suite :=
@@ -515,6 +518,13 @@ package body Test_Suites is
         ("JSON_Scalar_Image: array value returns ""...""",
          Pi_Acme_App_Tests.Test_JSON_Scalar_Array'Access));
 
+      Result.Add_Test (App_State_Caller.Create
+        ("App_State One_Shot_Result initial value is empty",
+         Pi_Acme_App_Tests.Test_One_Shot_Result_Initial'Access));
+      Result.Add_Test (App_State_Caller.Create
+        ("App_State One_Shot_Result first-write-wins",
+         Pi_Acme_App_Tests.Test_One_Shot_Result_First_Write_Wins'Access));
+
       --  Session_History integration tests (require live acme)
       Result.Add_Test (Session_History_Caller.Create
         ("[integration] Render: file not found writes error",
@@ -629,6 +639,15 @@ package body Test_Suites is
       Result.Add_Test (Tool_URI_Caller.Create
         ("Scan_Fork_Token: missing turn number",
          Tool_URI_Tests.Test_Scan_Fork_No_Turn'Access));
+
+      --  Subagent (--one-shot) integration tests (require live acme)
+      Result.Add_Test (Subagent_Int_Caller.Create
+        ("[subagent] One-shot returns JSON with output and session_id",
+         Subagent_Integration_Tests.Test_One_Shot_Returns_Json'Access));
+      Result.Add_Test (Subagent_Int_Caller.Create
+        ("[subagent] Two --one-shot runs use distinct sessions",
+         Subagent_Integration_Tests
+           .Test_One_Shot_Fresh_Session_Each_Run'Access));
 
       return Result;
    end Suite;

@@ -1125,4 +1125,30 @@ package body Pi_Acme_App_Tests is
               "Array value should return ""...""");
    end Test_JSON_Scalar_Array;
 
+   --  ── One_Shot_Result ────────────────────────────────────────────────
+
+   --  One_Shot_Result returns "" before any result is stored.
+   procedure Test_One_Shot_Result_Initial (T : in out Test) is
+      pragma Unreferenced (T);
+      S : App_State;
+   begin
+      Assert (S.One_Shot_Result = "",
+              "One_Shot_Result should be empty before any Set call");
+   end Test_One_Shot_Result_Initial;
+
+   --  Set_One_Shot_Result stores the value; a second call is silently
+   --  ignored (first-write-wins semantics).
+   procedure Test_One_Shot_Result_First_Write_Wins (T : in out Test) is
+      pragma Unreferenced (T);
+      S : App_State;
+   begin
+      S.Set_One_Shot_Result ("{""output"":""hello""}");
+      Assert (S.One_Shot_Result = "{""output"":""hello""}",
+              "One_Shot_Result should return the first stored value");
+      --  Second write must not overwrite.
+      S.Set_One_Shot_Result ("{""error"":""ignored""}");
+      Assert (S.One_Shot_Result = "{""output"":""hello""}",
+              "Second Set_One_Shot_Result call must be ignored");
+   end Test_One_Shot_Result_First_Write_Wins;
+
 end Pi_Acme_App_Tests;
