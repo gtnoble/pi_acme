@@ -433,9 +433,26 @@ package body Test_Suites is
         ("App_State Has_Text_Delta independent of Text_Emitted",
          Pi_Acme_App_Tests.Test_State_Has_Text_Delta_Independent'Access));
       Result.Add_Test (App_State_Caller.Create
-        ("App_State Pending_Stats gated by Has_Text_Delta",
-         Pi_Acme_App_Tests.Test_State_Pending_Stats_Gated_By_Text_Delta
-           'Access));
+        ("App_State Last_Stop_Reason initial value is empty",
+         Pi_Acme_App_Tests.Test_State_Last_Stop_Reason_Initial'Access));
+      Result.Add_Test (App_State_Caller.Create
+        ("App_State Last_Stop_Reason round-trip for all stop-reason values",
+         Pi_Acme_App_Tests.Test_State_Last_Stop_Reason_Round_Trip'Access));
+      Result.Add_Test (App_State_Caller.Create
+        ("App_State Last_Stop_Reason independent of all other flags",
+         Pi_Acme_App_Tests.Test_State_Last_Stop_Reason_Independent'Access));
+      Result.Add_Test (App_State_Caller.Create
+        ("App_State Last_Error_Message initial value is empty",
+         Pi_Acme_App_Tests.Test_State_Last_Error_Message_Initial'Access));
+      Result.Add_Test (App_State_Caller.Create
+        ("App_State Last_Error_Message round-trip and independence",
+         Pi_Acme_App_Tests
+           .Test_State_Last_Error_Message_Round_Trip'Access));
+      Result.Add_Test (App_State_Caller.Create
+        ("App_State Pending_Stats gated by Last_Stop_Reason "
+         & "(stop/length only)",
+         Pi_Acme_App_Tests
+           .Test_State_Pending_Stats_Gated_By_Stop_Reason'Access));
       Result.Add_Test (App_State_Caller.Create
         ("Edit_Diff_Lines: identical texts return (no changes)",
          Pi_Acme_App_Tests.Test_Edit_Diff_No_Change'Access));

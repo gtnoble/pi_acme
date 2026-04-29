@@ -46,12 +46,30 @@ package Pi_Acme_App_Tests is
    procedure Test_State_Is_Retrying_Independent (T : in out Test);
 
    --  App_State Has_Text_Delta — tracks whether a text_delta arrived in the
-   --  current agent turn; used to gate the turn separator on agent_end so
-   --  that tool-only (or error/retry) turns do not emit a spurious separator.
+   --  current agent turn.
    procedure Test_State_Has_Text_Delta_Initial             (T : in out Test);
    procedure Test_State_Has_Text_Delta_Set_And_Clear       (T : in out Test);
    procedure Test_State_Has_Text_Delta_Independent         (T : in out Test);
-   procedure Test_State_Pending_Stats_Gated_By_Text_Delta  (T : in out Test);
+
+   --  App_State Last_Stop_Reason — stopReason from the last assistant
+   --  message_end in the current agent run.  "stop"/"length" means the
+   --  agent's final LLM call produced a text response; "toolUse" means an
+   --  intermediate tool-calling turn (should not occur at agent_end).
+   --  Resets to "" at agent_start.  Used to gate the turn footer and stats
+   --  request in the agent_end handler.
+   procedure Test_State_Last_Stop_Reason_Initial           (T : in out Test);
+   procedure Test_State_Last_Stop_Reason_Round_Trip        (T : in out Test);
+   procedure Test_State_Last_Stop_Reason_Independent       (T : in out Test);
+
+   --  App_State Last_Error_Message — errorMessage from the last assistant
+   --  message_end with stopReason "error".  Empty when the last turn did not
+   --  produce an error, or when pi did not supply a message.
+   procedure Test_State_Last_Error_Message_Initial         (T : in out Test);
+   procedure Test_State_Last_Error_Message_Round_Trip      (T : in out Test);
+
+   --  Pending_Stats is gated by Last_Stop_Reason in Dispatch_Pi_Event.
+   --  "stop" and "length" trigger the footer; other reasons do not.
+   procedure Test_State_Pending_Stats_Gated_By_Stop_Reason (T : in out Test);
 
    --  Edit_Diff_Lines
    procedure Test_Edit_Diff_No_Change          (T : in out Test);

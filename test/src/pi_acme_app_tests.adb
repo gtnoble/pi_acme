@@ -481,33 +481,168 @@ package body Pi_Acme_App_Tests is
               "Text_Emitted must be unaffected by clearing Has_Text_Delta");
    end Test_State_Has_Text_Delta_Independent;
 
-   --  Pending_Stats is gated by Has_Text_Delta in Dispatch_Pi_Event.
-   --  Verify the two paths: tool-only agent_end (no separator) and
-   --  text-producing agent_end (separator + stats requested).
-   procedure Test_State_Pending_Stats_Gated_By_Text_Delta
+   --  Pending_Stats is gated by Last_Stop_Reason in Dispatch_Pi_Event.
+   --  Verify the three paths:
+   --    "stop"    → stats requested → footer emitted
+   --    "length"  → stats requested → footer emitted
+   --    anything else → no stats requested → no footer
+   procedure Test_State_Pending_Stats_Gated_By_Stop_Reason
      (T : in out Test)
    is
       pragma Unreferenced (T);
       S : App_State;
-   begin
-      --  Path A: tool-only agent_end — Has_Text_Delta is False.
-      --  The Dispatch_Pi_Event guard: if State.Has_Text_Delta then
-      --    State.Set_Pending_Stats (True); end if;
-      Assert (not S.Has_Text_Delta, "Precondition: no text delta");
-      if S.Has_Text_Delta then
-         S.Set_Pending_Stats (True);
-      end if;
-      Assert (not S.Pending_Stats,
-              "Pending_Stats must stay False for a tool-only agent_end");
 
-      --  Path B: text-producing agent_end — Has_Text_Delta is True.
-      S.Set_Has_Text_Delta (True);
-      if S.Has_Text_Delta then
-         S.Set_Pending_Stats (True);
-      end if;
+      --  Simulate the agent_end footer gate from Dispatch_Pi_Event:
+      --    declare
+      --       Stop : constant String := State.Last_Stop_Reason;
+      --    begin
+      --       if Stop = "stop" or else Stop = "length" then
+      --          State.Set_Pending_Stats (True); ...
+      --       end if;
+      --    end;
+      procedure Run_Agent_End_Gate is
+         Stop : constant String := S.Last_Stop_Reason;
+      begin
+         if Stop = "stop" or else Stop = "length" then
+            S.Set_Pending_Stats (True);
+         end if;
+      end Run_Agent_End_Gate;
+
+   begin
+      --  Path A: stopReason "toolUse" (intermediate tool-calling turn).
+      --  Pending_Stats must stay False.
+      S.Set_Last_Stop_Reason ("toolUse");
+      Run_Agent_End_Gate;
+      Assert (not S.Pending_Stats,
+              "Pending_Stats must be False when stopReason = ""toolUse""");
+
+      --  Path B: stopReason "" (no message_end received, e.g. pi crashed).
+      --  Pending_Stats must stay False.
+      S.Set_Last_Stop_Reason ("");
+      Run_Agent_End_Gate;
+      Assert (not S.Pending_Stats,
+              "Pending_Stats must be False when stopReason is empty");
+
+      --  Path C: stopReason "error".
+      --  Pending_Stats must stay False (no text response produced).
+      S.Set_Last_Stop_Reason ("error");
+      Run_Agent_End_Gate;
+      Assert (not S.Pending_Stats,
+              "Pending_Stats must be False when stopReason = ""error""");
+
+      --  Path D: stopReason "stop" — normal final text response.
+      --  Pending_Stats must be True.
+      S.Set_Last_Stop_Reason ("stop");
+      Run_Agent_End_Gate;
       Assert (S.Pending_Stats,
-              "Pending_Stats must be True when Has_Text_Delta is True");
-   end Test_State_Pending_Stats_Gated_By_Text_Delta;
+              "Pending_Stats must be True when stopReason = ""stop""");
+
+      --  Reset and check Path E: stopReason "length" — max-token final turn.
+      --  Pending_Stats must be True.
+      S.Set_Pending_Stats (False);
+      S.Set_Last_Stop_Reason ("length");
+      Run_Agent_End_Gate;
+      Assert (S.Pending_Stats,
+              "Pending_Stats must be True when stopReason = ""length""");
+   end Test_State_Pending_Stats_Gated_By_Stop_Reason;
+
+   --  ── App_State Last_Stop_Reason ────────────────────────────────────────
+
+   --  Last_Stop_Reason defaults to "" on a freshly created App_State.
+   procedure Test_State_Last_Stop_Reason_Initial (T : in out Test) is
+      pragma Unreferenced (T);
+      S : App_State;
+   begin
+      Assert (S.Last_Stop_Reason = "",
+              "Last_Stop_Reason should be empty initially");
+   end Test_State_Last_Stop_Reason_Initial;
+
+   --  Set_Last_Stop_Reason stores and can overwrite the value.
+   procedure Test_State_Last_Stop_Reason_Round_Trip (T : in out Test) is
+      pragma Unreferenced (T);
+      S : App_State;
+   begin
+      S.Set_Last_Stop_Reason ("stop");
+      Assert (S.Last_Stop_Reason = "stop",
+              "Last_Stop_Reason should return ""stop""");
+      S.Set_Last_Stop_Reason ("toolUse");
+      Assert (S.Last_Stop_Reason = "toolUse",
+              "Last_Stop_Reason should update to ""toolUse""");
+      S.Set_Last_Stop_Reason ("length");
+      Assert (S.Last_Stop_Reason = "length",
+              "Last_Stop_Reason should update to ""length""");
+      S.Set_Last_Stop_Reason ("error");
+      Assert (S.Last_Stop_Reason = "error",
+              "Last_Stop_Reason should update to ""error""");
+      S.Set_Last_Stop_Reason ("aborted");
+      Assert (S.Last_Stop_Reason = "aborted",
+              "Last_Stop_Reason should update to ""aborted""");
+      S.Set_Last_Stop_Reason ("");
+      Assert (S.Last_Stop_Reason = "",
+              "Last_Stop_Reason should reset to empty string");
+   end Test_State_Last_Stop_Reason_Round_Trip;
+
+   --  Last_Stop_Reason is independent of all other flags.
+   procedure Test_State_Last_Stop_Reason_Independent (T : in out Test) is
+      pragma Unreferenced (T);
+      S : App_State;
+   begin
+      S.Set_Last_Stop_Reason ("stop");
+      Assert (not S.Has_Text_Delta,
+              "Has_Text_Delta must be unaffected by Set_Last_Stop_Reason");
+      Assert (not S.Has_Tool_In_Turn,
+              "Has_Tool_In_Turn must be unaffected by Set_Last_Stop_Reason");
+      Assert (not S.Text_Emitted,
+              "Text_Emitted must be unaffected by Set_Last_Stop_Reason");
+      Assert (not S.Is_Retrying,
+              "Is_Retrying must be unaffected by Set_Last_Stop_Reason");
+
+      --  Setting other flags must leave Last_Stop_Reason unchanged.
+      S.Set_Has_Text_Delta (True);
+      S.Set_Has_Tool_In_Turn (True);
+      S.Set_Text_Emitted (True);
+      S.Set_Is_Retrying (True);
+      Assert (S.Last_Stop_Reason = "stop",
+              "Last_Stop_Reason must be unaffected by other flag writes");
+   end Test_State_Last_Stop_Reason_Independent;
+
+   --  ── App_State Last_Error_Message ──────────────────────────────────────
+
+   --  Last_Error_Message defaults to "" on a freshly created App_State.
+   procedure Test_State_Last_Error_Message_Initial (T : in out Test) is
+      pragma Unreferenced (T);
+      S : App_State;
+   begin
+      Assert (S.Last_Error_Message = "",
+              "Last_Error_Message should be empty initially");
+   end Test_State_Last_Error_Message_Initial;
+
+   --  Set_Last_Error_Message stores and can overwrite the value; it is
+   --  independent of Last_Stop_Reason and all other flags.
+   procedure Test_State_Last_Error_Message_Round_Trip (T : in out Test) is
+      pragma Unreferenced (T);
+      S : App_State;
+   begin
+      S.Set_Last_Error_Message ("context length exceeded");
+      Assert (S.Last_Error_Message = "context length exceeded",
+              "Last_Error_Message should store the error string");
+
+      --  Setting Last_Error_Message must not disturb Last_Stop_Reason.
+      S.Set_Last_Stop_Reason ("error");
+      S.Set_Last_Error_Message ("rate limit exceeded");
+      Assert (S.Last_Error_Message = "rate limit exceeded",
+              "Last_Error_Message should update to new value");
+      Assert (S.Last_Stop_Reason = "error",
+              "Last_Stop_Reason must be unaffected by Set_Last_Error_Message");
+
+      --  Clear the error message; Last_Stop_Reason must remain.
+      S.Set_Last_Error_Message ("");
+      Assert (S.Last_Error_Message = "",
+              "Last_Error_Message should reset to empty string");
+      Assert (S.Last_Stop_Reason = "error",
+              "Last_Stop_Reason must still be ""error"" after clearing "
+              & "Last_Error_Message");
+   end Test_State_Last_Error_Message_Round_Trip;
 
    --  ── Edit_Diff_Lines ──────────────────────────────────────────────────
    procedure Test_Edit_Diff_No_Change (T : in out Test) is

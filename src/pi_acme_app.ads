@@ -42,6 +42,23 @@ package Pi_Acme_App is
       --  True only when at least one text_delta arrived in the current
       --  agent turn (tool-only turns leave this False).
       function Has_Text_Delta     return Boolean;
+      --  True when tool_execution_start fired in the current agent turn.
+      --  Reset at agent_start alongside Has_Text_Delta.
+      function Has_Tool_In_Turn   return Boolean;
+      --  stopReason from the last assistant message_end event in the
+      --  current agent run.  Reset to "" at agent_start.  Possible values
+      --  emitted by pi: "stop" (normal completion), "length" (max tokens),
+      --  "toolUse" (intermediate turn — another LLM call follows),
+      --  "aborted", "error".  A value of "stop" or "length" means the
+      --  agent's final LLM call produced a text response; "toolUse" means
+      --  more turns are still pending (not possible at agent_end, but
+      --  tracked for safety).
+      function Last_Stop_Reason   return String;
+      --  errorMessage from the last assistant message_end with
+      --  stopReason "error".  Empty when the last turn did not produce
+      --  an error, or when pi did not supply a message.  Reset at
+      --  agent_start alongside Last_Stop_Reason.
+      function Last_Error_Message return String;
       function Pending_Stats      return Boolean;
       function Context_Window     return Natural;
       function Turn_Input_Tokens  return Natural;
@@ -68,7 +85,10 @@ package Pi_Acme_App is
       procedure Set_Aborted        (Value : Boolean);
       procedure Set_Is_Retrying    (Value : Boolean);
       procedure Set_Text_Emitted   (Value : Boolean);
-      procedure Set_Has_Text_Delta (Value : Boolean);
+      procedure Set_Has_Text_Delta   (Value : Boolean);
+      procedure Set_Has_Tool_In_Turn (Value : Boolean);
+      procedure Set_Last_Stop_Reason  (Value : String);
+      procedure Set_Last_Error_Message (Value : String);
       procedure Set_Pending_Stats  (Value : Boolean);
       procedure Set_Context_Window (N     : Natural);
       procedure Set_Turn_Tokens    (Input, Output : Natural);
@@ -128,7 +148,10 @@ package Pi_Acme_App is
       P_Aborted       : Boolean := False;
       P_Is_Retrying   : Boolean := False;
       P_Text_Emitted  : Boolean := False;
-      P_Has_Text_Delta : Boolean := False;
+      P_Has_Text_Delta   : Boolean := False;
+      P_Has_Tool_In_Turn : Boolean := False;
+      P_Last_Stop_Reason  : Ada.Strings.Unbounded.Unbounded_String;
+      P_Last_Error_Message : Ada.Strings.Unbounded.Unbounded_String;
       P_Pending_Stats : Boolean := False;
       P_Ctx_Win       : Natural := 0;
       P_Turn_In       : Natural := 0;

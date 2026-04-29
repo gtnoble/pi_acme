@@ -93,7 +93,7 @@ package body Pi_Acme_App is
       function Was_Aborted        return Boolean is (P_Aborted);
       function Is_Retrying        return Boolean is (P_Is_Retrying);
       function Text_Emitted       return Boolean is (P_Text_Emitted);
-      function Has_Text_Delta     return Boolean is (P_Has_Text_Delta);
+      function Has_Tool_In_Turn return Boolean is (P_Has_Tool_In_Turn);
       function Pending_Stats      return Boolean is (P_Pending_Stats);
       function Context_Window     return Natural is (P_Ctx_Win);
       function Turn_Input_Tokens  return Natural is (P_Turn_In);
@@ -154,10 +154,33 @@ package body Pi_Acme_App is
          P_Text_Emitted := Value;
       end Set_Text_Emitted;
 
+      function Has_Text_Delta return Boolean is (P_Has_Text_Delta);
+
       procedure Set_Has_Text_Delta (Value : Boolean) is
       begin
          P_Has_Text_Delta := Value;
       end Set_Has_Text_Delta;
+
+      procedure Set_Has_Tool_In_Turn (Value : Boolean) is
+      begin
+         P_Has_Tool_In_Turn := Value;
+      end Set_Has_Tool_In_Turn;
+
+      function Last_Stop_Reason return String is
+        (To_String (P_Last_Stop_Reason));
+
+      procedure Set_Last_Stop_Reason (Value : String) is
+      begin
+         P_Last_Stop_Reason := To_Unbounded_String (Value);
+      end Set_Last_Stop_Reason;
+
+      function Last_Error_Message return String is
+        (To_String (P_Last_Error_Message));
+
+      procedure Set_Last_Error_Message (Value : String) is
+      begin
+         P_Last_Error_Message := To_Unbounded_String (Value);
+      end Set_Last_Error_Message;
 
       procedure Set_Pending_Stats (Value : Boolean) is
       begin
@@ -1086,6 +1109,9 @@ package body Pi_Acme_App is
          State.Set_Streaming (True);
          State.Set_Text_Emitted (False);
          State.Set_Has_Text_Delta (False);
+         State.Set_Has_Tool_In_Turn (False);
+         State.Set_Last_Stop_Reason ("");
+         State.Set_Last_Error_Message ("");
          Section := No_Section;
          Acme.Window.Replace_Line1
            (Win, FS, Format_Status (State, "running"));
@@ -1107,22 +1133,35 @@ package body Pi_Acme_App is
             --  it will emit auto_retry_start right after this event, which
             --  sets Is_Retrying and suppresses this message on all
             --  subsequent retry attempts.
-            Acme.Window.Append
-              (Win, FS,
-               ASCII.LF
-               & UC_WARN
-               & " No response from pi"
-               & " -- context may be too long, or a temporary error"
-               & " occurred. Try New."
-               & ASCII.LF);
+            declare
+               Err_Msg : constant String := State.Last_Error_Message;
+            begin
+               Acme.Window.Append
+                 (Win, FS,
+                  ASCII.LF
+                  & UC_WARN
+                  & " No response from pi"
+                  & (if Err_Msg'Length > 0
+                     then ": " & Err_Msg
+                     else " -- context may be too long, or a temporary"
+                          & " error occurred. Try New.")
+                  & ASCII.LF);
+            end;
          end if;
-         --  Only emit the stats summary and turn separator when the
-         --  agent produced an actual text response.  Tool-only intermediate
-         --  turns are silently skipped.
-         if State.Has_Text_Delta then
-            State.Set_Pending_Stats (True);
-            Pi_RPC.Send (Proc, "{""type"":""get_session_stats""}");
-         end if;
+         --  Emit the turn footer and request stats when the agent's final
+         --  LLM call ended normally.  pi sets stopReason "stop" or "length"
+         --  on the last text-producing call; intermediate tool-calling turns
+         --  use "toolUse".  agent_end fires exactly once per user prompt
+         --  (not once per internal LLM call), so there is no risk of a
+         --  premature footer.
+         declare
+            Stop : constant String := State.Last_Stop_Reason;
+         begin
+            if Stop = "stop" or else Stop = "length" then
+               State.Set_Pending_Stats (True);
+               Pi_RPC.Send (Proc, "{""type"":""get_session_stats""}");
+            end if;
+         end;
          Acme.Window.Replace_Line1
            (Win, FS, Format_Status (State, "ready"));
       elsif Kind = "message_update" then
@@ -1186,6 +1225,7 @@ package body Pi_Acme_App is
       --  ── tool_execution_start ──────────────────────────────────────────
       elsif Kind = "tool_execution_start" then
          State.Set_Text_Emitted (True);
+         State.Set_Has_Tool_In_Turn (True);
          declare
             Tool    : constant String     := Get_String (Event, "toolName");
             Args    : constant JSON_Value := Get_Object (Event, "args");
@@ -1355,30 +1395,44 @@ package body Pi_Acme_App is
             Msg   : constant JSON_Value := Get_Object (Event, "message");
             Usage : constant JSON_Value := Get_Object (Msg, "usage");
          begin
-            if Get_String (Msg, "role") = "assistant"
-              and then Usage.Kind = JSON_Object_Type
-            then
+            if Get_String (Msg, "role") = "assistant" then
+               --  Track the stop reason so agent_end can detect whether
+               --  this was the agent's final text turn ("stop", "length")
+               --  or an intermediate tool-calling turn ("toolUse").
                declare
-                  Input_Count  : constant Natural :=
-                    Get_Integer (Usage, "input")
-                    + Get_Integer (Usage, "cacheRead")
-                    + Get_Integer (Usage, "cacheWrite");
-                  Output_Count : constant Natural :=
-                    Get_Integer (Usage, "output");
-                  Cost_Val     : constant JSON_Value :=
-                    Get_Object (Usage, "cost");
-                  Turn_Cost    : constant Natural :=
-                    (if Cost_Val.Kind = JSON_Object_Type
-                     then Get_Cost_Dmil (Cost_Val, "total")
-                     else 0);
+                  Stop : constant String := Get_String (Msg, "stopReason");
+                  Err  : constant String := Get_String (Msg, "errorMessage");
                begin
-                  if Input_Count > 0 or else Output_Count > 0 then
-                     State.Set_Turn_Tokens (Input_Count, Output_Count);
-                  end if;
-                  if Turn_Cost > 0 then
-                     State.Set_Turn_Cost (Turn_Cost);
+                  State.Set_Last_Stop_Reason (Stop);
+                  if Stop = "error" then
+                     State.Set_Last_Error_Message (Err);
+                  else
+                     State.Set_Last_Error_Message ("");
                   end if;
                end;
+               if Usage.Kind = JSON_Object_Type then
+                  declare
+                     Input_Count  : constant Natural :=
+                       Get_Integer (Usage, "input")
+                       + Get_Integer (Usage, "cacheRead")
+                       + Get_Integer (Usage, "cacheWrite");
+                     Output_Count : constant Natural :=
+                       Get_Integer (Usage, "output");
+                     Cost_Val     : constant JSON_Value :=
+                       Get_Object (Usage, "cost");
+                     Turn_Cost    : constant Natural :=
+                       (if Cost_Val.Kind = JSON_Object_Type
+                        then Get_Cost_Dmil (Cost_Val, "total")
+                        else 0);
+                  begin
+                     if Input_Count > 0 or else Output_Count > 0 then
+                        State.Set_Turn_Tokens (Input_Count, Output_Count);
+                     end if;
+                     if Turn_Cost > 0 then
+                        State.Set_Turn_Cost (Turn_Cost);
+                     end if;
+                  end;
+               end if;
             end if;
          end;
 
@@ -2947,15 +3001,27 @@ package body Pi_Acme_App is
                                  Result : constant JSON_Value :=
                                    Create_Object;
                               begin
-                                 Result.Set_Field
-                                   ("session_id",
-                                    Create (State.Session_Id));
-                                 Result.Set_Field
-                                   ("output", Create (Output));
-                                 State.Set_One_Shot_Result (Write (Result));
+                                 if Output'Length > 0 then
+                                    --  Non-empty text: this is the final
+                                    --  turn.  Store the result and exit.
+                                    Result.Set_Field
+                                      ("session_id",
+                                       Create (State.Session_Id));
+                                    Result.Set_Field
+                                      ("output", Create (Output));
+                                    State.Set_One_Shot_Result
+                                      (Write (Result));
+                                    State.Signal_Shutdown;
+                                    One_Shot_Done := True;
+                                 end if;
+                                 --  Empty output means the turn contained
+                                 --  only tool calls or whitespace deltas
+                                 --  (e.g. GPT-4.1 emits a blank line
+                                 --  before tool_use blocks).  Do not exit:
+                                 --  keep reading.  The next text-producing
+                                 --  agent_end will trigger another fetch
+                                 --  and eventually get real content.
                               end;
-                              State.Signal_Shutdown;
-                              One_Shot_Done := True;
 
                            --  One-shot: a failed prompt response means pi
                            --  rejected the turn before emitting agent_start,
@@ -3008,18 +3074,34 @@ package body Pi_Acme_App is
                                          ("{""error"":""aborted""}");
                                        State.Signal_Shutdown;
                                        One_Shot_Done := True;
-                                    elsif not State.Has_Text_Delta
-                                      and then not State.Is_Retrying
+                                    elsif not State.Is_Retrying
+                                      and then
+                                        State.Last_Stop_Reason
+                                        not in "stop" | "length"
+                                      and then not State.Text_Emitted
                                     then
+                                       --  Truly empty turn: nothing was
+                                       --  shown (no text, no tool calls)
+                                       --  and the last LLM call did not
+                                       --  end normally.  The agent
+                                       --  produced nothing useful.
                                        State.Set_One_Shot_Result
                                          ("{""error"":"
                                           & """No response from pi""}");
                                        State.Signal_Shutdown;
                                        One_Shot_Done := True;
-                                    elsif State.Has_Text_Delta
-                                      and then not State.Is_Retrying
+                                    --  Final turn: the last LLM call ended
+                                    --  with "stop" or "length", meaning the
+                                    --  agent produced a text response.
+                                    --  Fetch via get_last_assistant_text.
+                                    --  Handles turns that mixed tool calls
+                                    --  with a final text response.
+                                    elsif not State.Is_Retrying
+                                      and then
+                                        (State.Last_Stop_Reason = "stop"
+                                         or else
+                                           State.Last_Stop_Reason = "length")
                                     then
-                                       --  Successful turn: fetch the text.
                                        Pi_RPC.Send
                                          (Proc,
                                           "{""type"":"
