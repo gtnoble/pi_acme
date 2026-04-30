@@ -2,11 +2,6 @@
 
 ## Project Overview
 
-**pi_acme** is an Ada reimplementation of the Python script at
-`/home/gtnoble/Projects/pi-acme/pi-acme`. Refer to that script as the
-reference implementation when behaviour is unclear or a feature needs to be
-ported.
-
 The project is an acme text editor frontend for the `pi` coding agent. It
 spawns `pi --mode rpc` as a subprocess, communicates with it over JSON-line
 pipes, and presents a live interactive window inside acme.

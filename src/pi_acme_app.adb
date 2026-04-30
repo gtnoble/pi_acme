@@ -2925,6 +2925,18 @@ package body Pi_Acme_App is
             Pi_RPC.Send (Proc, "{""type"":""get_session_stats""}");
             if First_Boot then
                First_Boot := False;
+               --  One-shot: disable auto-compaction so that an overflow
+               --  does not cause pi to compact the context and silently
+               --  re-send the prompt, which would trigger another agent
+               --  turn and repeat indefinitely.  In one-shot mode the
+               --  task is bounded; if the context is too large for the
+               --  model the run should fail rather than loop.
+               if Opts.One_Shot then
+                  Pi_RPC.Send
+                    (Proc,
+                     "{""type"":""set_auto_compaction"","
+                     & """enabled"":false}");
+               end if;
                if To_String (Opts.Model) /= "" then
                   declare
                      Provider_End : Natural := 0;
