@@ -2937,7 +2937,13 @@ package body Pi_Acme_App is
                      "{""type"":""set_auto_compaction"","
                      & """enabled"":false}");
                end if;
-               if To_String (Opts.Model) /= "" then
+               --  Send set_model only in interactive mode.  In one-shot
+               --  mode --no-session is always active so pi starts with the
+               --  correct model from the --model CLI flag; sending set_model
+               --  would needlessly write to ~/.pi/agent/settings.json,
+               --  overwriting the user's preferred default model whenever a
+               --  subagent uses a different model.
+               if To_String (Opts.Model) /= "" and then not Opts.One_Shot then
                   declare
                      Provider_End : Natural := 0;
                      Model_Spec   : constant String := To_String (Opts.Model);
