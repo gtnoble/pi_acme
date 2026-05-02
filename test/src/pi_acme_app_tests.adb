@@ -2,6 +2,9 @@ with AUnit.Assertions;
 with Ada.Strings.Unbounded; use Ada.Strings.Unbounded;
 with GNATCOLL.JSON;         use GNATCOLL.JSON;
 with Pi_Acme_App; use Pi_Acme_App;
+with Pi_Acme_App.Utils; use Pi_Acme_App.Utils;
+with Nine_P;
+with Pi_Acme_App.Dispatch;   use Pi_Acme_App.Dispatch;
 
 package body Pi_Acme_App_Tests is
 
@@ -234,7 +237,8 @@ package body Pi_Acme_App_Tests is
               "Single token, N=2");
    end Test_Nth_Field_Basic;
 
-   --  Tab separators (pi --list-models output uses tabs).
+   --  Tab separators — Nth_Field is field-separator-agnostic;
+   --  this test verifies tab-separated input works correctly.
    procedure Test_Nth_Field_Tabs (T : in out Test) is
       pragma Unreferenced (T);
       Line : constant String :=
@@ -546,9 +550,64 @@ package body Pi_Acme_App_Tests is
               "Pending_Stats must be True when stopReason = ""length""");
    end Test_State_Pending_Stats_Gated_By_Stop_Reason;
 
-   --  ── App_State Last_Stop_Reason ────────────────────────────────────────
+   --  ── App_State Models_Pending ─────────────────────────────────────────
+   --
+   --  Models_Pending gates the +models sub-window: the Acme_Event_Task sets
+   --  it True and sends get_available_models; Dispatch_Pi_Event clears it
+   --  once the response arrives and the window is opened.
 
-   --  Last_Stop_Reason defaults to "" on a freshly created App_State.
+   --  Models_Pending defaults to False on a freshly created App_State.
+   procedure Test_State_Models_Pending_Initial (T : in out Test) is
+      pragma Unreferenced (T);
+      S : App_State;
+   begin
+      Assert (not S.Models_Pending,
+              "Models_Pending should be False initially");
+   end Test_State_Models_Pending_Initial;
+
+   --  Set_Models_Pending toggles the flag in both directions.
+   procedure Test_State_Models_Pending_Set_And_Clear (T : in out Test) is
+      pragma Unreferenced (T);
+      S : App_State;
+   begin
+      S.Set_Models_Pending (True);
+      Assert (S.Models_Pending,
+              "Models_Pending should be True after Set_Models_Pending(True)");
+      S.Set_Models_Pending (False);
+      Assert (not S.Models_Pending,
+              "Models_Pending should be False after "
+              & "Set_Models_Pending(False)");
+   end Test_State_Models_Pending_Set_And_Clear;
+
+   --  Models_Pending is independent of Pending_Stats and other boolean flags.
+   --  Setting one must not affect the others.
+   procedure Test_State_Models_Pending_Independent (T : in out Test) is
+      pragma Unreferenced (T);
+      S : App_State;
+   begin
+      --  Set only Models_Pending; Pending_Stats must stay False.
+      S.Set_Models_Pending (True);
+      Assert (not S.Pending_Stats,
+              "Pending_Stats must stay False when only Models_Pending is set");
+      Assert (not S.Is_Streaming,
+              "Is_Streaming must stay False when only Models_Pending is set");
+      Assert (not S.Is_Compacting,
+              "Is_Compacting must stay False when only Models_Pending is set");
+
+      --  Set Pending_Stats; Models_Pending must be unaffected.
+      S.Set_Pending_Stats (True);
+      Assert (S.Models_Pending,
+              "Models_Pending must remain True after Set_Pending_Stats");
+
+      --  Clear Models_Pending; Pending_Stats must remain True.
+      S.Set_Models_Pending (False);
+      Assert (not S.Models_Pending,
+              "Models_Pending should be False after clearing");
+      Assert (S.Pending_Stats,
+              "Pending_Stats must be unaffected by clearing Models_Pending");
+   end Test_State_Models_Pending_Independent;
+
+   --  ── App_State Last_Stop_Reason ────────────────────────────────────────
    procedure Test_State_Last_Stop_Reason_Initial (T : in out Test) is
       pragma Unreferenced (T);
       S : App_State;
@@ -1285,5 +1344,383 @@ package body Pi_Acme_App_Tests is
       Assert (S.One_Shot_Result = "{""output"":""hello""}",
               "Second Set_One_Shot_Result call must be ignored");
    end Test_One_Shot_Result_First_Write_Wins;
+
+   --  ── Format_Tool_Field ─────────────────────────────────────────────────
+   --
+   --  U+2502 BOX DRAWINGS LIGHT VERTICAL (box-v): UTF-8 E2 94 82
+   --  U+2026 HORIZONTAL ELLIPSIS (ellipsis):       UTF-8 E2 80 A6
+
+   UC_Box_V : constant String :=
+     Character'Val (16#E2#)
+     & Character'Val (16#94#)
+     & Character'Val (16#82#);
+
+   UC_Ellip : constant String :=
+     Character'Val (16#E2#)
+     & Character'Val (16#80#)
+     & Character'Val (16#A6#);
+
+   --  Single-line value: no LF in Value -- "box-v name: value".
+   procedure Test_Format_Tool_Field_Single_Line (T : in out Test) is
+      pragma Unreferenced (T);
+      Result : constant String :=
+        Format_Tool_Field ("command", "echo hello");
+   begin
+      Assert (Result = UC_Box_V & " command: echo hello",
+              "Single-line field should be ""box-v command: echo hello""; "
+              & "got """ & Result & """");
+   end Test_Format_Tool_Field_Single_Line;
+
+   --  Two-line value: one LF -- label on first line, box-v only on second.
+   procedure Test_Format_Tool_Field_Two_Lines (T : in out Test) is
+      pragma Unreferenced (T);
+      Value  : constant String := "echo a" & ASCII.LF & "echo b";
+      Result : constant String :=
+        Format_Tool_Field ("command", Value);
+      Expect : constant String :=
+        UC_Box_V & " command: echo a"
+        & ASCII.LF & UC_Box_V & " echo b";
+   begin
+      Assert (Result = Expect,
+              "Two-line field: got """ & Result & """");
+   end Test_Format_Tool_Field_Two_Lines;
+
+   --  Three-line value: two LFs -- box-v border on every line.
+   procedure Test_Format_Tool_Field_Three_Lines (T : in out Test) is
+      pragma Unreferenced (T);
+      Value  : constant String :=
+        "cd /tmp" & ASCII.LF
+        & "echo a" & ASCII.LF
+        & "echo b";
+      Result : constant String :=
+        Format_Tool_Field ("command", Value);
+      Expect : constant String :=
+        UC_Box_V & " command: cd /tmp"
+        & ASCII.LF & UC_Box_V & " echo a"
+        & ASCII.LF & UC_Box_V & " echo b";
+   begin
+      Assert (Result = Expect,
+              "Three-line field: got """ & Result & """");
+   end Test_Format_Tool_Field_Three_Lines;
+
+   --  Trailing LF: last char is LF -- empty continuation line appended.
+   procedure Test_Format_Tool_Field_Trailing_LF (T : in out Test) is
+      pragma Unreferenced (T);
+      Value  : constant String := "hello" & ASCII.LF;
+      Result : constant String :=
+        Format_Tool_Field ("k", Value);
+      Expect : constant String :=
+        UC_Box_V & " k: hello"
+        & ASCII.LF & UC_Box_V & " ";
+   begin
+      Assert (Result = Expect,
+              "Trailing-LF field: got """ & Result & """");
+   end Test_Format_Tool_Field_Trailing_LF;
+
+   --  Empty value: Format_Tool_Field returns "box-v name: ".
+   procedure Test_Format_Tool_Field_Empty_Value (T : in out Test) is
+      pragma Unreferenced (T);
+      Result : constant String :=
+        Format_Tool_Field ("key", "");
+   begin
+      Assert (Result = UC_Box_V & " key: ",
+              "Empty-value field should be ""box-v key: ""; "
+              & "got """ & Result & """");
+   end Test_Format_Tool_Field_Empty_Value;
+
+   --  Truncation: value longer than Max_Len is truncated with ellipsis.
+   procedure Test_Format_Tool_Field_Truncation (T : in out Test) is
+      pragma Unreferenced (T);
+      --  Max_Len = 8: keep first 5 bytes ("abcde") + 3-byte ellipsis = 8.
+      Value  : constant String := "abcdefghij";
+      Result : constant String :=
+        Format_Tool_Field ("k", Value, Max_Len => 8);
+      Expect : constant String :=
+        UC_Box_V & " k: abcde" & UC_Ellip;
+   begin
+      Assert (Result = Expect,
+              "Truncated field should end with ellipsis; "
+              & "got """ & Result & """");
+   end Test_Format_Tool_Field_Truncation;
+
+   --  ── Format_Kilo ───────────────────────────────────────────────────────
+
+   procedure Test_Format_Kilo_Below_Threshold (T : in out Test) is
+      pragma Unreferenced (T);
+   begin
+      Assert (Format_Kilo (0)   = "0",   "0 -> ""0""");
+      Assert (Format_Kilo (1)   = "1",   "1 -> ""1""");
+      Assert (Format_Kilo (999) = "999", "999 -> ""999""");
+   end Test_Format_Kilo_Below_Threshold;
+
+   --  Round multiples of 1000 have no fractional part.
+   procedure Test_Format_Kilo_Round_Numbers (T : in out Test) is
+      pragma Unreferenced (T);
+   begin
+      Assert (Format_Kilo (1000)   = "1k",   "1000 -> ""1k""");
+      Assert (Format_Kilo (2000)   = "2k",   "2000 -> ""2k""");
+      Assert (Format_Kilo (10000)  = "10k",  "10000 -> ""10k""");
+      Assert (Format_Kilo (200000) = "200k", "200000 -> ""200k""");
+   end Test_Format_Kilo_Round_Numbers;
+
+   --  Values whose tenth is non-zero produce a "N.Mk" result.
+   --  Note: Format_Kilo uses Float'Floor for the fractional tenth, so
+   --  1050 -> frac = Floor(0.05 * 10) = Floor(0.5) = 0 -> "1k".
+   procedure Test_Format_Kilo_Fractional (T : in out Test) is
+      pragma Unreferenced (T);
+   begin
+      Assert (Format_Kilo (1500)  = "1.5k",  "1500 -> ""1.5k""");
+      Assert (Format_Kilo (1100)  = "1.1k",  "1100 -> ""1.1k""");
+      Assert (Format_Kilo (12300) = "12.3k", "12300 -> ""12.3k""");
+      Assert (Format_Kilo (1050)  = "1k",
+              "1050: frac = floor(0.5) = 0, no decimal part");
+   end Test_Format_Kilo_Fractional;
+
+   --  ── Format_Cost ───────────────────────────────────────────────────────
+
+   procedure Test_Format_Cost_Zero (T : in out Test) is
+      pragma Unreferenced (T);
+   begin
+      Assert (Format_Cost (0) = "$0.0000",
+              "0 dmil -> ""$0.0000""");
+   end Test_Format_Cost_Zero;
+
+   --  Sub-dollar values: the integer part is 0, fractional part is
+   --  zero-padded to four digits.
+   procedure Test_Format_Cost_Fractional (T : in out Test) is
+      pragma Unreferenced (T);
+   begin
+      Assert (Format_Cost (1)    = "$0.0001", "1 dmil -> ""$0.0001""");
+      Assert (Format_Cost (100)  = "$0.0100", "100 dmil -> ""$0.0100""");
+      Assert (Format_Cost (234)  = "$0.0234", "234 dmil -> ""$0.0234""");
+      Assert (Format_Cost (9999) = "$0.9999", "9999 dmil -> ""$0.9999""");
+   end Test_Format_Cost_Fractional;
+
+   --  Values >= 10000 have a non-zero dollar integer part.
+   procedure Test_Format_Cost_Dollars (T : in out Test) is
+      pragma Unreferenced (T);
+   begin
+      Assert (Format_Cost (10000)  = "$1.0000",
+              "10000 dmil -> ""$1.0000""");
+      Assert (Format_Cost (12345)  = "$1.2345",
+              "12345 dmil -> ""$1.2345""");
+      Assert (Format_Cost (100000) = "$10.0000",
+              "100000 dmil -> ""$10.0000""");
+   end Test_Format_Cost_Dollars;
+
+   --  ── Agent_Stem ────────────────────────────────────────────────────────
+
+   --  When the basename ends with ".agent.md" the suffix is stripped.
+   procedure Test_Agent_Stem_With_Extension (T : in out Test) is
+      pragma Unreferenced (T);
+   begin
+      Assert (Agent_Stem ("/home/user/.pi/myagent.agent.md") = "myagent",
+              "Full path with .agent.md -> stem only");
+      Assert (Agent_Stem ("plain.agent.md") = "plain",
+              "Relative path with .agent.md extension -> stem only");
+   end Test_Agent_Stem_With_Extension;
+
+   --  Without the ".agent.md" suffix the whole basename is returned.
+   procedure Test_Agent_Stem_No_Extension (T : in out Test) is
+      pragma Unreferenced (T);
+   begin
+      Assert (Agent_Stem ("/path/to/noext") = "noext",
+              "Path without .agent.md -> basename returned as-is");
+      Assert (Agent_Stem ("bare") = "bare",
+              "No slash, no extension -> returned unchanged");
+   end Test_Agent_Stem_No_Extension;
+
+   --  ── Extract_Plumb_Data ────────────────────────────────────────────────
+
+   --  Build a Nine_P.Byte_Array from a plain String for test input.
+   --  Declared at the package body level so all Extract_Plumb_Data tests
+   --  can use it.
+   function To_Bytes (S : String) return Nine_P.Byte_Array is
+      Result : Nine_P.Byte_Array (0 .. S'Length - 1);
+   begin
+      for I in S'Range loop
+         Result (I - S'First) := Nine_P.Uint8 (Character'Pos (S (I)));
+      end loop;
+      return Result;
+   end To_Bytes;
+
+   --  Normal 7-field plumb message; ndata matches data length exactly.
+   procedure Test_Extract_Plumb_Data_Basic (T : in out Test) is
+      pragma Unreferenced (T);
+      --  Fields: src / dst / wdir / type / attr / ndata / data
+      Msg : constant Nine_P.Byte_Array :=
+        To_Bytes ("app"      & ASCII.LF
+                  & "pi-model" & ASCII.LF
+                  & "/home"    & ASCII.LF
+                  & "text"     & ASCII.LF
+                  & ""         & ASCII.LF
+                  & "13"       & ASCII.LF
+                  & "openai/gpt-4o");
+   begin
+      Assert (Extract_Plumb_Data (Msg) = "openai/gpt-4o",
+              "Basic plumb message: data field returned verbatim");
+   end Test_Extract_Plumb_Data_Basic;
+
+   --  The plumber appends a trailing LF after the data; ndata must clip it.
+   procedure Test_Extract_Plumb_Data_Strips_Trailing_LF (T : in out Test) is
+      pragma Unreferenced (T);
+      Uuid : constant String := "aabbccdd-1122-3344-5566-aabbccddeeff";
+      Msg  : constant Nine_P.Byte_Array :=
+        To_Bytes ("app"         & ASCII.LF
+                  & "pi-session" & ASCII.LF
+                  & "/home"      & ASCII.LF
+                  & "text"       & ASCII.LF
+                  & ""           & ASCII.LF
+                  & "36"         & ASCII.LF
+                  & Uuid         & ASCII.LF);  --  trailing LF from plumber
+   begin
+      Assert (Extract_Plumb_Data (Msg) = Uuid,
+              "Trailing LF after data is stripped via ndata");
+   end Test_Extract_Plumb_Data_Strips_Trailing_LF;
+
+   --  Fewer than 6 newlines: the ndata field is never reached -> "".
+   procedure Test_Extract_Plumb_Data_Too_Few_Fields (T : in out Test) is
+      pragma Unreferenced (T);
+      Msg : constant Nine_P.Byte_Array :=
+        To_Bytes ("src" & ASCII.LF & "dst" & ASCII.LF & "only-three-fields");
+   begin
+      Assert (Extract_Plumb_Data (Msg) = "",
+              "Fewer than 6 newlines -> empty string");
+   end Test_Extract_Plumb_Data_Too_Few_Fields;
+
+   --  Empty byte array: loop body never executes -> "".
+   procedure Test_Extract_Plumb_Data_Empty (T : in out Test) is
+      pragma Unreferenced (T);
+      Msg : constant Nine_P.Byte_Array (1 .. 0) := (others => 0);
+   begin
+      Assert (Extract_Plumb_Data (Msg) = "",
+              "Empty byte array -> empty string");
+   end Test_Extract_Plumb_Data_Empty;
+
+   --  ── Get_Cost_Dmil ────────────────────────────────────────────────────
+
+   --  A JSON float representing $0.001 -> 10 dmil.
+   procedure Test_Get_Cost_Dmil_Float_Value (T : in out Test) is
+      pragma Unreferenced (T);
+      Val : JSON_Value := Create_Object;
+   begin
+      Val.Set_Field ("cost", Create (Long_Float (0.001)));
+      Assert (Get_Cost_Dmil (Val, "cost") = 10,
+              "Float 0.001 -> 10 dmil");
+   end Test_Get_Cost_Dmil_Float_Value;
+
+   --  A JSON float of 0.0 is not positive -> 0 dmil.
+   procedure Test_Get_Cost_Dmil_Zero_Float (T : in out Test) is
+      pragma Unreferenced (T);
+      Val : JSON_Value := Create_Object;
+   begin
+      Val.Set_Field ("cost", Create (Long_Float (0.0)));
+      Assert (Get_Cost_Dmil (Val, "cost") = 0,
+              "Float 0.0 -> 0 dmil");
+   end Test_Get_Cost_Dmil_Zero_Float;
+
+   --  A JSON integer 0 is not positive -> 0 dmil.
+   procedure Test_Get_Cost_Dmil_Integer_Zero (T : in out Test) is
+      pragma Unreferenced (T);
+      Val : JSON_Value := Create_Object;
+   begin
+      Val.Set_Field ("cost", Create (Integer'(0)));
+      Assert (Get_Cost_Dmil (Val, "cost") = 0,
+              "Integer 0 -> 0 dmil");
+   end Test_Get_Cost_Dmil_Integer_Zero;
+
+   --  An absent field -> 0 dmil.
+   procedure Test_Get_Cost_Dmil_Absent_Field (T : in out Test) is
+      pragma Unreferenced (T);
+      Val : constant JSON_Value := Create_Object;
+   begin
+      Assert (Get_Cost_Dmil (Val, "cost") = 0,
+              "Absent field -> 0 dmil");
+   end Test_Get_Cost_Dmil_Absent_Field;
+
+   --  A negative float -> 0 dmil (not positive guard).
+   procedure Test_Get_Cost_Dmil_Negative_Float (T : in out Test) is
+      pragma Unreferenced (T);
+      Val : JSON_Value := Create_Object;
+   begin
+      Val.Set_Field ("cost", Create (Long_Float (-0.001)));
+      Assert (Get_Cost_Dmil (Val, "cost") = 0,
+              "Negative float -> 0 dmil");
+   end Test_Get_Cost_Dmil_Negative_Float;
+
+   --  ── Format_Status ────────────────────────────────────────────────────
+
+   --  Shared helper -- true iff Sub appears anywhere in Str.
+   function Status_Contains (Str : String; Sub : String) return Boolean is
+   begin
+      if Sub'Length = 0 or else Str'Length < Sub'Length then
+         return False;
+      end if;
+      for I in Str'First .. Str'Last - Sub'Length + 1 loop
+         if Str (I .. I + Sub'Length - 1) = Sub then
+            return True;
+         end if;
+      end loop;
+      return False;
+   end Status_Contains;
+
+   --  Default (empty) state: only the bullet and Extra are present.
+   procedure Test_Format_Status_Default (T : in out Test) is
+      pragma Unreferenced (T);
+      S : App_State;
+   begin
+      Assert (Format_Status (S, "ready") = UC_BULLET & " ready",
+              "Empty state should produce bullet + ready");
+   end Test_Format_Status_Default;
+
+   --  The Extra argument is reflected verbatim.
+   procedure Test_Format_Status_Custom_Extra (T : in out Test) is
+      pragma Unreferenced (T);
+      S : App_State;
+   begin
+      Assert (Format_Status (S, "running") = UC_BULLET & " running",
+              "Extra=running should produce bullet + running");
+   end Test_Format_Status_Custom_Extra;
+
+   --  When a model is set, "[provider/model]" appears in the status.
+   procedure Test_Format_Status_With_Model (T : in out Test) is
+      pragma Unreferenced (T);
+      S : App_State;
+   begin
+      S.Set_Model ("anthropic/claude-3-5");
+      Assert (Status_Contains (Format_Status (S), " [anthropic/claude-3-5]"),
+              "Model set -> ""[anthropic/claude-3-5]"" in status");
+   end Test_Format_Status_With_Model;
+
+   --  When a session ID of >= 8 chars is set, "session:XXXXXXXX" appears.
+   procedure Test_Format_Status_With_Session (T : in out Test) is
+      pragma Unreferenced (T);
+      S : App_State;
+   begin
+      S.Set_Session_Id ("abcdef01-1234-5678-uuid");
+      Assert (Status_Contains (Format_Status (S), " session:abcdef01"),
+              "Session ID -> first 8 chars shown as session:abcdef01");
+   end Test_Format_Status_With_Session;
+
+   --  When both token count and context window are set, "Nk/Mk (P%)" appears.
+   procedure Test_Format_Status_With_Context (T : in out Test) is
+      pragma Unreferenced (T);
+      S : App_State;
+   begin
+      S.Set_Turn_Tokens (1500, 0);
+      S.Set_Context_Window (200_000);
+      Assert (Status_Contains (Format_Status (S), "1.5k/200k"),
+              "Token/context window -> ""1.5k/200k"" in status");
+   end Test_Format_Status_With_Context;
+
+   --  When a thinking level is set, "~level" appears in the status.
+   procedure Test_Format_Status_With_Thinking (T : in out Test) is
+      pragma Unreferenced (T);
+      S : App_State;
+   begin
+      S.Set_Thinking ("medium");
+      Assert (Status_Contains (Format_Status (S), " ~medium"),
+              "Thinking level -> "" ~medium"" in status");
+   end Test_Format_Status_With_Thinking;
 
 end Pi_Acme_App_Tests;

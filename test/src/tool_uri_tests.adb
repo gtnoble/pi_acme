@@ -4,7 +4,7 @@
 --  For revision history, see the project version-control log.
 
 with AUnit.Assertions;
-with Pi_Acme_App; use Pi_Acme_App;
+with Pi_Acme_App.Utils;  use Pi_Acme_App.Utils;
 
 package body Tool_URI_Tests is
 

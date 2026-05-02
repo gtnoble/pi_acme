@@ -64,6 +64,14 @@ export default function (pi: ExtensionAPI) {
             "System-prompt text or path to an .agent.md file for the subagent.",
         }),
       ),
+      name: Type.Optional(
+        Type.String({
+          description:
+            "Short label for the subagent window's tagline.  Displayed as" +
+            ' "CWD/+pi:label | …" so concurrent subagent windows are easy' +
+            " to tell apart.",
+        }),
+      ),
     }),
 
     async execute(_toolCallId, params, signal) {
@@ -83,6 +91,9 @@ export default function (pi: ExtensionAPI) {
       }
       if (params.agent) {
         args.push("--agent", params.agent);
+      }
+      if (params.name) {
+        args.push("--name", params.name);
       }
 
       return new Promise((resolve) => {

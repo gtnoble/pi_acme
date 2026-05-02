@@ -8,9 +8,6 @@
 --  For revision history, see the project version-control log.
 
 with Ada.Strings.Unbounded;
-with Acme.Window;
-with GNATCOLL.JSON;
-with Nine_P.Client;
 
 package Pi_Acme_App is
 
@@ -59,7 +56,12 @@ package Pi_Acme_App is
       --  an error, or when pi did not supply a message.  Reset at
       --  agent_start alongside Last_Stop_Reason.
       function Last_Error_Message return String;
-      function Pending_Stats      return Boolean;
+      function Pending_Stats        return Boolean;
+      --  True while waiting for the get_available_models response that will
+      --  populate the +models sub-window.  Set by the Acme_Event_Task when
+      --  the user presses Models; cleared by Dispatch_Pi_Event when the
+      --  response arrives and the sub-window has been opened.
+      function Models_Pending       return Boolean;
       function Context_Window     return Natural;
       function Turn_Input_Tokens  return Natural;
       function Turn_Output_Tokens return Natural;
@@ -90,6 +92,7 @@ package Pi_Acme_App is
       procedure Set_Last_Stop_Reason  (Value : String);
       procedure Set_Last_Error_Message (Value : String);
       procedure Set_Pending_Stats  (Value : Boolean);
+      procedure Set_Models_Pending (Value : Boolean);
       procedure Set_Context_Window (N     : Natural);
       procedure Set_Turn_Tokens    (Input, Output : Natural);
       --  Per-turn cost from message_end usage.cost.total (units of $0.0001).
@@ -153,6 +156,7 @@ package Pi_Acme_App is
       P_Last_Stop_Reason  : Ada.Strings.Unbounded.Unbounded_String;
       P_Last_Error_Message : Ada.Strings.Unbounded.Unbounded_String;
       P_Pending_Stats : Boolean := False;
+      P_Models_Pending : Boolean := False;
       P_Ctx_Win       : Natural := 0;
       P_Turn_In       : Natural := 0;
       P_Turn_Out      : Natural := 0;
@@ -191,123 +195,22 @@ package Pi_Acme_App is
       --  When True, the window closes and the process exits after the first
       --  complete agent turn, printing a JSON result line to stdout.
       One_Shot       : Boolean := False;
+      --  Optional short label appended to the window name as ":Name" so the
+      --  acme tagline reads "CWD/+pi:Name | …".  Empty means no suffix.
+      Name           : Ada.Strings.Unbounded.Unbounded_String;
    end record;
+
+   --  ── Section_Kind ─────────────────────────────────────────────────────
+   --
+   --  Tracks which kind of streaming content is currently being appended to
+   --  the window body.  Shared between Dispatch_Pi_Event (in
+   --  Pi_Acme_App.Dispatch) and the Pi_Stdout_Task in Run.
+
+   type Section_Kind is
+     (No_Section, Thinking_Section, Text_Section, Tool_Section);
 
    --  ── Entry point ──────────────────────────────────────────────────────
 
    procedure Run (Opts : Options);
-
-   --  ── Session history ──────────────────────────────────────────────────
-
-   --  Read the JSONL session file for UUID and replay the full conversation
-   --  history into Win.  Searches all session directories (not just the
-   --  current working directory) so sessions from other projects are found.
-   --  Restores State.Turn_Tokens from the last assistant usage block so
-   --  that the status line and +stats window are accurate immediately after
-   --  a session reload.  Appends a turn footer when rendering completes.
-   --  Writes an error message to Win if the session file cannot be located
-   --  or read.
-   procedure Render_Session_History
-     (UUID  : String;
-      Win   : in out Acme.Window.Win;
-      FS    : not null access Nine_P.Client.Fs;
-      State : in out App_State);
-
-   --  Append the live end-of-turn footer to Win using the current values in
-   --  State, and increment State.Turn_Count.  The footer format is:
-   --
-   --    [ctx ... | ^... out | $... turn | $... session | provider/model]
-   --    fork+PID/UUID/N
-   --    ════════════════════════════════════════════════════════════
-   --
-   --  Cost segments are omitted when zero.  The bracketed summary as a
-   --  whole is omitted when no parts are available.  Used by
-   --  Dispatch_Pi_Event when get_session_stats returns.
-   procedure Append_Live_Turn_Footer
-     (Win   : in out Acme.Window.Win;
-      FS    : not null access Nine_P.Client.Fs;
-      State : in out App_State;
-      PID   : String);
-
-   --  ── String utilities ─────────────────────────────────────────────────
-
-   --  Return the N-th (1-based) whitespace-separated token from Text,
-   --  or "" if Text has fewer than N tokens.  Whitespace is space or HT.
-   function Nth_Field (Text : String; N : Positive) return String;
-
-   --  Extract the session UUID from a plumb session token.
-   --  Pid_Prefix must be "llm-chat+PID/" for this pi-acme instance.
-   --
-   --  Accepts:
-   --    "llm-chat+PID/UUID"       → UUID  (PID-tagged for this instance)
-   --    "llm-chat+UUID"           → UUID  (bare token, backward-compat)
-   --  Rejects (returns ""):
-   --    "llm-chat+OTHER_PID/UUID" → ""   (tagged for another instance)
-   --    anything else             → ""
-   function Parse_Session_Token
-     (Data       : String;
-      Pid_Prefix : String) return String;
-
-   --  ── Edit diff helper ─────────────────────────────────────────────────
-
-   --  Run `diff -u` on Old_Text vs New_Text, strip the ---/+++/@@ unified
-   --  diff header lines, and return the remaining body lines joined by
-   --  ASCII.LF.  Truncates to Max_L body lines (default 30) and appends a
-   --  "… N more lines" trailer when the diff exceeds the limit.
-   --
-   --  Returns "(no changes)" when Old_Text = New_Text or when the diff
-   --  produces no body lines.  Returns "(diff error)" if the `diff`
-   --  subprocess cannot be started.
-   --
-   --  Matches the behaviour of the Python reference's edit_diff_lines().
-   function Edit_Diff_Lines
-     (Old_Text : String;
-      New_Text : String;
-      Max_L    : Positive := 30) return String;
-
-   --  ── JSON display utilities ────────────────────────────────────────────
-
-   --  Return a human-readable string for a scalar JSON value suitable for
-   --  display in tool-call argument summaries.
-   --
-   --  Strings are returned as-is (no quotation marks).  Integers, booleans,
-   --  and floats are serialised by GNATCOLL.JSON.Write (e.g. 42, true,
-   --  3.14).  Null, object, and array values return "...".
-   function JSON_Scalar_Image
-     (Val : GNATCOLL.JSON.JSON_Value) return String;
-
-   --  ── Tool call URI helpers ─────────────────────────────────────────────
-
-   --  Return the first 16 hex characters of the SHA-256 digest of Tool_Id,
-   --  matching the token computed by the Python reference implementation:
-   --    hashlib.sha256(tool_id.encode()).hexdigest()[:16]
-   function Hash_Tool_Id (Tool_Id : String) return String;
-
-   --  Scan Context (a substring of the acme body starting at rune Ctx_Start)
-   --  for a llm-chat+.../tool/... URI that contains rune position Anchor.
-   --  Returns the first matching token string, or "" if none is found.
-   --
-   --  Token pattern:  llm-chat+ [0-9a-f-]+ /tool/ [0-9a-f]+
-   --
-   --  Local byte positions in Context are converted to approximate body rune
-   --  offsets by adding Ctx_Start.  This is exact for the ASCII-only tokens
-   --  this function scans for; any multi-byte UTF-8 characters that precede
-   --  the token in the context window introduce only a small positive error
-   --  that is acceptable for click-position matching.
-   function Scan_Tool_Token
-     (Context   : String;
-      Ctx_Start : Natural;
-      Anchor    : Natural) return String;
-
-   --  Scan Context for a fork+PID/SESSION-UUID/TURN-N token that contains
-   --  rune position Anchor.  Returns the token string, or "".
-   --
-   --  Token pattern:  fork+ [0-9]+ / [0-9a-f-]+ / [0-9]+
-   --
-   --  The same ASCII-only approximation for rune offsets applies here.
-   function Scan_Fork_Token
-     (Context   : String;
-      Ctx_Start : Natural;
-      Anchor    : Natural) return String;
 
 end Pi_Acme_App;

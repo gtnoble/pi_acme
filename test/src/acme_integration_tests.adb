@@ -11,6 +11,7 @@ with Acme.Window;
 with Acme.Event_Parser;
 with Acme.Raw_Events;
 with Pi_Acme_App;
+with Pi_Acme_App.Dispatch;   use Pi_Acme_App.Dispatch;
 
 package body Acme_Integration_Tests is
 
@@ -506,7 +507,7 @@ package body Acme_Integration_Tests is
          State.Set_Context_Window (400_000);
          State.Set_Turn_Tokens (24_000, 537);
 
-         Pi_Acme_App.Append_Live_Turn_Footer
+         Append_Live_Turn_Footer
            (Win   => Win,
             FS    => FS'Access,
             State => State,
@@ -569,7 +570,7 @@ package body Acme_Integration_Tests is
             Cache_Write => 0,
             Total       => 52_000);
 
-         Pi_Acme_App.Append_Live_Turn_Footer
+         Append_Live_Turn_Footer
            (Win   => Win,
             FS    => FS'Access,
             State => State,

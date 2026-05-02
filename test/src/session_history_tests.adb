@@ -17,6 +17,7 @@ with Nine_P.Client;          use Nine_P.Client;
 with Acme;
 with Acme.Window;
 with Pi_Acme_App;            use Pi_Acme_App;
+with Pi_Acme_App.History;    use Pi_Acme_App.History;
 
 package body Session_History_Tests is
 

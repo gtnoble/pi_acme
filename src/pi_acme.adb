@@ -2,12 +2,14 @@
 --
 --  Usage: pi_acme [--session UUID] [--model PROVIDER/ID]
 --                 [--agent NAME] [--no-tools] [--no-session]
---                 [--prompt TEXT] [--one-shot]
+--                 [--prompt TEXT] [--one-shot] [--name LABEL]
 --
 --  --prompt TEXT  Send TEXT as the first prompt immediately after startup.
 --  --one-shot     Exit automatically after the first complete agent turn,
 --                 printing a JSON result line to stdout.  Intended for use
 --                 by the subagent_window extension.
+--  --name LABEL   Short label appended to the window name as ":LABEL" so
+--                 the acme tagline reads "CWD/+pi:LABEL | …".
 --
 --  Project: pi_acme
 --  For revision history, see the project version-control log.
@@ -56,6 +58,12 @@ begin
          elsif Arg = "--one-shot" then
             Opts.One_Shot   := True;
             Opts.No_Session := True;
+         elsif Arg = "--name"
+           and then I < Ada.Command_Line.Argument_Count
+         then
+            I := I + 1;
+            Opts.Name :=
+              To_Unbounded_String (Ada.Command_Line.Argument (I));
          else
             Ada.Text_IO.Put_Line
               (Ada.Text_IO.Standard_Error,

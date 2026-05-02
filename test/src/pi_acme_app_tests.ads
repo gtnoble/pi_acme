@@ -71,6 +71,13 @@ package Pi_Acme_App_Tests is
    --  "stop" and "length" trigger the footer; other reasons do not.
    procedure Test_State_Pending_Stats_Gated_By_Stop_Reason (T : in out Test);
 
+   --  App_State Models_Pending — set by Acme_Event_Task when the Models
+   --  tag command is pressed; cleared by Dispatch_Pi_Event when the
+   --  get_available_models response arrives and the +models window is opened.
+   procedure Test_State_Models_Pending_Initial           (T : in out Test);
+   procedure Test_State_Models_Pending_Set_And_Clear     (T : in out Test);
+   procedure Test_State_Models_Pending_Independent       (T : in out Test);
+
    --  Edit_Diff_Lines
    procedure Test_Edit_Diff_No_Change          (T : in out Test);
    procedure Test_Edit_Diff_Single_Substitution (T : in out Test);
@@ -118,5 +125,83 @@ package Pi_Acme_App_Tests is
 
    procedure Test_One_Shot_Result_Initial          (T : in out Test);
    procedure Test_One_Shot_Result_First_Write_Wins (T : in out Test);
+
+   --  ── Format_Tool_Field ─────────────────────────────────────────────────
+
+   procedure Test_Format_Tool_Field_Single_Line   (T : in out Test);
+   --  Single-line value: returns "│ name: value" with no embedded LF.
+
+   procedure Test_Format_Tool_Field_Two_Lines     (T : in out Test);
+   --  Value with one LF: first line has label; second line has │ only.
+
+   procedure Test_Format_Tool_Field_Three_Lines   (T : in out Test);
+   --  Value with two LFs: all three lines carry the │ border.
+
+   procedure Test_Format_Tool_Field_Trailing_LF   (T : in out Test);
+   --  Value ending with LF: produces a blank-body continuation line.
+
+   procedure Test_Format_Tool_Field_Empty_Value   (T : in out Test);
+   --  Empty value: returns "│ name: " (label with no value text).
+
+   procedure Test_Format_Tool_Field_Truncation    (T : in out Test);
+   --  Value longer than Max_Len is truncated and ends with "…".
+
+   --  ── Format_Kilo ───────────────────────────────────────────────────────
+   --  Format_Kilo formats a Natural as a compact kilo string.
+   --  Values below 1000 are returned as plain decimal; values >= 1000 are
+   --  expressed as Nk (whole) or N.Mk (with fractional tenth).
+
+   procedure Test_Format_Kilo_Below_Threshold (T : in out Test);
+   procedure Test_Format_Kilo_Round_Numbers   (T : in out Test);
+   procedure Test_Format_Kilo_Fractional      (T : in out Test);
+
+   --  ── Format_Cost ───────────────────────────────────────────────────────
+   --  Format_Cost converts an integer in units of $0.0001 (dmil) to
+   --  a "$D.FFFF" string.  0 → "$0.0000"; 12345 → "$1.2345".
+
+   procedure Test_Format_Cost_Zero       (T : in out Test);
+   procedure Test_Format_Cost_Fractional (T : in out Test);
+   procedure Test_Format_Cost_Dollars    (T : in out Test);
+
+   --  ── Agent_Stem ────────────────────────────────────────────────────────
+   --  Agent_Stem extracts the basename of an agent path, stripping the
+   --  ".agent.md" suffix when present.
+
+   procedure Test_Agent_Stem_With_Extension (T : in out Test);
+   procedure Test_Agent_Stem_No_Extension   (T : in out Test);
+
+   --  ── Extract_Plumb_Data ────────────────────────────────────────────────
+   --  Extract_Plumb_Data parses a 7-field newline-delimited plumb message
+   --  and returns the data field, clipped to ndata bytes so that any
+   --  trailing newline added by the plumber is stripped.
+
+   procedure Test_Extract_Plumb_Data_Basic                (T : in out Test);
+   procedure Test_Extract_Plumb_Data_Strips_Trailing_LF   (T : in out Test);
+   procedure Test_Extract_Plumb_Data_Too_Few_Fields        (T : in out Test);
+   procedure Test_Extract_Plumb_Data_Empty                (T : in out Test);
+
+   --  ── Get_Cost_Dmil ────────────────────────────────────────────────────
+   --  Get_Cost_Dmil reads a JSON float or integer cost field and converts
+   --  it to integer dmil units ($0.0001) using round-half-up arithmetic.
+   --  Returns 0 for absent, zero, or negative values.
+
+   procedure Test_Get_Cost_Dmil_Float_Value    (T : in out Test);
+   procedure Test_Get_Cost_Dmil_Zero_Float     (T : in out Test);
+   procedure Test_Get_Cost_Dmil_Integer_Zero   (T : in out Test);
+   procedure Test_Get_Cost_Dmil_Absent_Field   (T : in out Test);
+   procedure Test_Get_Cost_Dmil_Negative_Float (T : in out Test);
+
+   --  ── Format_Status ─────────────────────────────────────────────────────
+   --  Format_Status builds the one-line status string placed in the first
+   --  body line of the +pi window.  Parts (model, agent, thinking, context,
+   --  session) are included only when the corresponding App_State fields
+   --  are populated.
+
+   procedure Test_Format_Status_Default        (T : in out Test);
+   procedure Test_Format_Status_Custom_Extra   (T : in out Test);
+   procedure Test_Format_Status_With_Model     (T : in out Test);
+   procedure Test_Format_Status_With_Session   (T : in out Test);
+   procedure Test_Format_Status_With_Context   (T : in out Test);
+   procedure Test_Format_Status_With_Thinking  (T : in out Test);
 
 end Pi_Acme_App_Tests;

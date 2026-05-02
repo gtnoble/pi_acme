@@ -382,7 +382,7 @@ package body Test_Suites is
         ("Nth_Field basic space-separated",
          Pi_Acme_App_Tests.Test_Nth_Field_Basic'Access));
       Result.Add_Test (App_State_Caller.Create
-        ("Nth_Field tab-separated (pi --list-models format)",
+        ("Nth_Field tab-separated input",
          Pi_Acme_App_Tests.Test_Nth_Field_Tabs'Access));
       Result.Add_Test (App_State_Caller.Create
         ("Nth_Field edge cases",
@@ -453,6 +453,17 @@ package body Test_Suites is
          & "(stop/length only)",
          Pi_Acme_App_Tests
            .Test_State_Pending_Stats_Gated_By_Stop_Reason'Access));
+      Result.Add_Test (App_State_Caller.Create
+        ("App_State Models_Pending defaults to False",
+         Pi_Acme_App_Tests.Test_State_Models_Pending_Initial'Access));
+      Result.Add_Test (App_State_Caller.Create
+        ("App_State Models_Pending Set_Models_Pending toggles flag",
+         Pi_Acme_App_Tests
+           .Test_State_Models_Pending_Set_And_Clear'Access));
+      Result.Add_Test (App_State_Caller.Create
+        ("App_State Models_Pending independent of Pending_Stats",
+         Pi_Acme_App_Tests
+           .Test_State_Models_Pending_Independent'Access));
       Result.Add_Test (App_State_Caller.Create
         ("Edit_Diff_Lines: identical texts return (no changes)",
          Pi_Acme_App_Tests.Test_Edit_Diff_No_Change'Access));
@@ -541,6 +552,106 @@ package body Test_Suites is
       Result.Add_Test (App_State_Caller.Create
         ("App_State One_Shot_Result first-write-wins",
          Pi_Acme_App_Tests.Test_One_Shot_Result_First_Write_Wins'Access));
+
+      Result.Add_Test (App_State_Caller.Create
+        ("Format_Tool_Field: single-line value returns border + label + value",
+         Pi_Acme_App_Tests.Test_Format_Tool_Field_Single_Line'Access));
+      Result.Add_Test (App_State_Caller.Create
+        ("Format_Tool_Field: two-line value carries border on both lines",
+         Pi_Acme_App_Tests.Test_Format_Tool_Field_Two_Lines'Access));
+      Result.Add_Test (App_State_Caller.Create
+        ("Format_Tool_Field: three-line value carries border on every line",
+         Pi_Acme_App_Tests.Test_Format_Tool_Field_Three_Lines'Access));
+      Result.Add_Test (App_State_Caller.Create
+        ("Format_Tool_Field: trailing LF produces empty continuation line",
+         Pi_Acme_App_Tests.Test_Format_Tool_Field_Trailing_LF'Access));
+      Result.Add_Test (App_State_Caller.Create
+        ("Format_Tool_Field: empty value returns border + label only",
+         Pi_Acme_App_Tests.Test_Format_Tool_Field_Empty_Value'Access));
+      Result.Add_Test (App_State_Caller.Create
+        ("Format_Tool_Field: value over Max_Len is truncated with ellipsis",
+         Pi_Acme_App_Tests.Test_Format_Tool_Field_Truncation'Access));
+
+      --  Format_Kilo
+      Result.Add_Test (App_State_Caller.Create
+        ("Format_Kilo: values below 1000 returned as decimal",
+         Pi_Acme_App_Tests.Test_Format_Kilo_Below_Threshold'Access));
+      Result.Add_Test (App_State_Caller.Create
+        ("Format_Kilo: exact multiples of 1000 use ""k"" suffix",
+         Pi_Acme_App_Tests.Test_Format_Kilo_Round_Numbers'Access));
+      Result.Add_Test (App_State_Caller.Create
+        ("Format_Kilo: non-zero tenth produces ""N.Mk"" form",
+         Pi_Acme_App_Tests.Test_Format_Kilo_Fractional'Access));
+
+      --  Format_Cost
+      Result.Add_Test (App_State_Caller.Create
+        ("Format_Cost: 0 dmil -> ""$0.0000""",
+         Pi_Acme_App_Tests.Test_Format_Cost_Zero'Access));
+      Result.Add_Test (App_State_Caller.Create
+        ("Format_Cost: sub-dollar values zero-pad fractional digits",
+         Pi_Acme_App_Tests.Test_Format_Cost_Fractional'Access));
+      Result.Add_Test (App_State_Caller.Create
+        ("Format_Cost: values >= 10000 dmil have non-zero dollar part",
+         Pi_Acme_App_Tests.Test_Format_Cost_Dollars'Access));
+
+      --  Agent_Stem
+      Result.Add_Test (App_State_Caller.Create
+        ("Agent_Stem: .agent.md suffix stripped from basename",
+         Pi_Acme_App_Tests.Test_Agent_Stem_With_Extension'Access));
+      Result.Add_Test (App_State_Caller.Create
+        ("Agent_Stem: no .agent.md suffix -- whole basename returned",
+         Pi_Acme_App_Tests.Test_Agent_Stem_No_Extension'Access));
+
+      --  Extract_Plumb_Data
+      Result.Add_Test (App_State_Caller.Create
+        ("Extract_Plumb_Data: data field returned from valid message",
+         Pi_Acme_App_Tests.Test_Extract_Plumb_Data_Basic'Access));
+      Result.Add_Test (App_State_Caller.Create
+        ("Extract_Plumb_Data: trailing LF stripped via ndata",
+         Pi_Acme_App_Tests.Test_Extract_Plumb_Data_Strips_Trailing_LF'Access));
+      Result.Add_Test (App_State_Caller.Create
+        ("Extract_Plumb_Data: fewer than 6 newlines returns empty string",
+         Pi_Acme_App_Tests.Test_Extract_Plumb_Data_Too_Few_Fields'Access));
+      Result.Add_Test (App_State_Caller.Create
+        ("Extract_Plumb_Data: empty byte array returns empty string",
+         Pi_Acme_App_Tests.Test_Extract_Plumb_Data_Empty'Access));
+
+      --  Get_Cost_Dmil
+      Result.Add_Test (App_State_Caller.Create
+        ("Get_Cost_Dmil: JSON float converted to dmil units",
+         Pi_Acme_App_Tests.Test_Get_Cost_Dmil_Float_Value'Access));
+      Result.Add_Test (App_State_Caller.Create
+        ("Get_Cost_Dmil: JSON float 0.0 returns 0",
+         Pi_Acme_App_Tests.Test_Get_Cost_Dmil_Zero_Float'Access));
+      Result.Add_Test (App_State_Caller.Create
+        ("Get_Cost_Dmil: JSON integer 0 returns 0",
+         Pi_Acme_App_Tests.Test_Get_Cost_Dmil_Integer_Zero'Access));
+      Result.Add_Test (App_State_Caller.Create
+        ("Get_Cost_Dmil: absent field returns 0",
+         Pi_Acme_App_Tests.Test_Get_Cost_Dmil_Absent_Field'Access));
+      Result.Add_Test (App_State_Caller.Create
+        ("Get_Cost_Dmil: negative float returns 0",
+         Pi_Acme_App_Tests.Test_Get_Cost_Dmil_Negative_Float'Access));
+
+      --  Format_Status
+      Result.Add_Test (App_State_Caller.Create
+        ("Format_Status: empty state produces ""* ready""",
+         Pi_Acme_App_Tests.Test_Format_Status_Default'Access));
+      Result.Add_Test (App_State_Caller.Create
+        ("Format_Status: Extra argument reflected verbatim",
+         Pi_Acme_App_Tests.Test_Format_Status_Custom_Extra'Access));
+      Result.Add_Test (App_State_Caller.Create
+        ("Format_Status: model shown as ""[provider/model]""",
+         Pi_Acme_App_Tests.Test_Format_Status_With_Model'Access));
+      Result.Add_Test (App_State_Caller.Create
+        ("Format_Status: session ID shows first 8 chars",
+         Pi_Acme_App_Tests.Test_Format_Status_With_Session'Access));
+      Result.Add_Test (App_State_Caller.Create
+        ("Format_Status: token/context window shown as ""Nk/Mk""",
+         Pi_Acme_App_Tests.Test_Format_Status_With_Context'Access));
+      Result.Add_Test (App_State_Caller.Create
+        ("Format_Status: thinking level shown as "" ~level""",
+         Pi_Acme_App_Tests.Test_Format_Status_With_Thinking'Access));
 
       --  Session_History integration tests (require live acme)
       Result.Add_Test (Session_History_Caller.Create
